@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use noema_core::{app_data_dir, scan_notes, status};
+use noema_core::{app_data_dir, get_notes_root, scan_notes, set_notes_root, status, watch_notes};
 
 #[derive(Parser)]
 #[command(name = "noema")]
@@ -19,11 +19,23 @@ enum Commands {
     Status,
     /// Show where Noema stores its config and index (app data directory).
     DataDir,
-    /// Scan a directory for markdown notes and list them.
-    Scan {
-        /// Root directory to scan (your notes folder).
+    /// Set the notes root directory (persisted for future use).
+    SetRoot {
+        /// Path to your notes folder.
         #[arg(value_name = "PATH")]
         path: PathBuf,
+    },
+    /// Scan a directory for markdown notes. Uses configured root if PATH omitted.
+    Scan {
+        /// Root directory to scan (optional; uses configured root if omitted).
+        #[arg(value_name = "PATH")]
+        path: Option<PathBuf>,
+    },
+    /// Watch notes directory and re-scan when files change. Ctrl+C to stop.
+    Watch {
+        /// Root directory to watch (optional; uses configured root if omitted).
+        #[arg(value_name = "PATH")]
+        path: Option<PathBuf>,
     },
 }
 
@@ -41,10 +53,21 @@ fn main() {
                 None => eprintln!("Could not determine app data directory."),
             }
         }
+        Commands::SetRoot { path } => {
+            match set_notes_root(&path) {
+                Ok(()) => println!("Notes root set to {}", path.display()),
+                Err(e) => eprintln!("Error: {}", e),
+            }
+        }
         Commands::Scan { path } => {
-            match scan_notes(&path) {
+            let root = path.or_else(get_notes_root);
+            let Some(root) = root else {
+                eprintln!("No notes root configured. Run: noema set-root <PATH>");
+                return;
+            };
+            match scan_notes(&root) {
                 Ok(notes) => {
-                    println!("Scanned {} note(s) under {}", notes.len(), path.display());
+                    println!("Scanned {} note(s) under {}", notes.len(), root.display());
                     for n in notes {
                         let p = n.body.lines().next().unwrap_or("").trim();
                         let preview = if p.len() > 60 { format!("{}...", &p[..60]) } else { p.to_string() };
@@ -52,6 +75,25 @@ fn main() {
                     }
                 }
                 Err(e) => eprintln!("Error: {}", e),
+            }
+        }
+        Commands::Watch { path } => {
+            let root = path.or_else(get_notes_root);
+            let Some(root) = root else {
+                eprintln!("No notes root configured. Run: noema set-root <PATH>");
+                return;
+            };
+            println!("Watching {}. Edit notes to trigger re-scan. Ctrl+C to stop.", root.display());
+            if let Ok(notes) = scan_notes(&root) {
+                println!("Initial scan: {} note(s)", notes.len());
+            }
+            if let Err(e) = watch_notes(&root, |res| {
+                match res {
+                    Ok(notes) => println!("Rescanned: {} note(s)", notes.len()),
+                    Err(e) => eprintln!("Scan error: {}", e),
+                }
+            }) {
+                eprintln!("Error: {}", e);
             }
         }
     }
