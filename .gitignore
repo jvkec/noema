@@ -1,1 +1,9 @@
+# Build artifacts
+target/
+
+# Agent-related docs
 PRD.md
+AGENT.md
+infra_docs/
+ui_docs/
+ux_docs/

@@ -1,0 +1,4 @@
+# One workspace w/ multiple crates
+[workspace]
+resolver = "2"
+members = ["crates/noema-core", "crates/noema-cli"]
