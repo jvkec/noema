@@ -3,7 +3,9 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use noema_core::{app_data_dir, get_notes_root, scan_notes, set_notes_root, status, watch_notes};
+use noema_core::{
+    app_data_dir, chunk_notes, get_notes_root, scan_notes, set_notes_root, status, watch_notes,
+};
 
 #[derive(Parser)]
 #[command(name = "noema")]
@@ -30,6 +32,15 @@ enum Commands {
         /// Root directory to scan (optional; uses configured root if omitted).
         #[arg(value_name = "PATH")]
         path: Option<PathBuf>,
+    },
+    /// Chunk notes for embedding. Uses configured root if PATH omitted.
+    Chunks {
+        /// Root directory to scan (optional; uses configured root if omitted).
+        #[arg(value_name = "PATH")]
+        path: Option<PathBuf>,
+        /// Max characters per chunk (default: 512).
+        #[arg(long, default_value = "512")]
+        max_chars: usize,
     },
     /// Watch notes directory and re-scan when files change. Ctrl+C to stop.
     Watch {
@@ -72,6 +83,28 @@ fn main() {
                         let p = n.body.lines().next().unwrap_or("").trim();
                         let preview = if p.len() > 60 { format!("{}...", &p[..60]) } else { p.to_string() };
                         println!("  {}  {}", n.path.display(), preview);
+                    }
+                }
+                Err(e) => eprintln!("Error: {}", e),
+            }
+        }
+        Commands::Chunks { path, max_chars } => {
+            let root = path.or_else(get_notes_root);
+            let Some(root) = root else {
+                eprintln!("No notes root configured. Run: noema set-root <PATH>");
+                return;
+            };
+            match scan_notes(&root) {
+                Ok(notes) => {
+                    let chunks = chunk_notes(&notes, max_chars);
+                    println!("Chunked {} note(s) into {} chunk(s) (max {} chars)", notes.len(), chunks.len(), max_chars);
+                    for c in chunks.iter().take(10) {
+                        let preview: String = c.text.chars().take(50).collect();
+                        let suffix = if c.text.len() > 50 { "…" } else { "" };
+                        println!("  [{}] {}  {}{}", c.index, c.note_path.display(), preview, suffix);
+                    }
+                    if chunks.len() > 10 {
+                        println!("  ... and {} more", chunks.len() - 10);
                     }
                 }
                 Err(e) => eprintln!("Error: {}", e),
