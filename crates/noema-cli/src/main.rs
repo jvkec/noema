@@ -4,8 +4,8 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use noema_core::{
-    app_data_dir, chunk_notes, get_notes_root, scan_notes, set_notes_root, status, watch_notes,
-    OllamaClient,
+    app_data_dir, build_index, chunk_notes, get_notes_root, scan_notes, set_notes_root, status,
+    watch_notes, OllamaClient,
 };
 
 #[derive(Parser)]
@@ -54,6 +54,42 @@ enum Commands {
         /// Text to embed.
         #[arg(value_name = "TEXT")]
         text: String,
+        /// Ollama base URL (default: http://localhost:11434).
+        #[arg(long, default_value = "http://localhost:11434")]
+        url: String,
+        /// Embedding model (default: nomic-embed-text).
+        #[arg(long, default_value = "nomic-embed-text")]
+        model: String,
+    },
+    /// Index notes: scan, chunk, embed, store in memory. Prints stats. No persistence.
+    Index {
+        /// Root directory to scan (optional; uses configured root if omitted).
+        #[arg(value_name = "PATH")]
+        path: Option<PathBuf>,
+        /// Max characters per chunk (default: 512).
+        #[arg(long, default_value = "512")]
+        max_chars: usize,
+        /// Ollama base URL (default: http://localhost:11434).
+        #[arg(long, default_value = "http://localhost:11434")]
+        url: String,
+        /// Embedding model (default: nomic-embed-text).
+        #[arg(long, default_value = "nomic-embed-text")]
+        model: String,
+    },
+    /// Search notes: runs index pipeline then finds chunks similar to query. No persistence.
+    Search {
+        /// Search query.
+        #[arg(value_name = "QUERY")]
+        query: String,
+        /// Root directory to scan (optional; uses configured root if omitted).
+        #[arg(value_name = "PATH")]
+        path: Option<PathBuf>,
+        /// Max results to return (default: 5).
+        #[arg(long, short, default_value = "5")]
+        k: usize,
+        /// Max characters per chunk (default: 512).
+        #[arg(long, default_value = "512")]
+        max_chars: usize,
         /// Ollama base URL (default: http://localhost:11434).
         #[arg(long, default_value = "http://localhost:11434")]
         url: String,
@@ -153,6 +189,74 @@ async fn main() {
             };
             match client.embed(&text).await {
                 Ok(emb) => println!("Embedding: {} dimensions", emb.len()),
+                Err(e) => eprintln!("Error: {}", e),
+            }
+        }
+        Commands::Index {
+            path,
+            max_chars,
+            url,
+            model,
+        } => {
+            let root = path.or_else(get_notes_root);
+            let Some(root) = root else {
+                eprintln!("No notes root configured. Run: noema set-root <PATH>");
+                return;
+            };
+            let client = match OllamaClient::from_url(&url) {
+                Ok(c) => c.with_embed_model(&model),
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    return;
+                }
+            };
+            match build_index(&root, &client, Some(max_chars)).await {
+                Ok(store) => println!("Indexed {} chunk(s) (in memory, no persistence)", store.len()),
+                Err(e) => eprintln!("Error: {}", e),
+            }
+        }
+        Commands::Search {
+            query,
+            path,
+            k,
+            max_chars,
+            url,
+            model,
+        } => {
+            let root = path.or_else(get_notes_root);
+            let Some(root) = root else {
+                eprintln!("No notes root configured. Run: noema set-root <PATH>");
+                return;
+            };
+            let client = match OllamaClient::from_url(&url) {
+                Ok(c) => c.with_embed_model(&model),
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    return;
+                }
+            };
+            match build_index(&root, &client, Some(max_chars)).await {
+                Ok(store) => {
+                    match client.embed(&query).await {
+                        Ok(q_emb) => {
+                            let results = store.search(&q_emb, k);
+                            for (i, (chunk, score)) in results.iter().enumerate() {
+                                let preview: String = chunk.text.chars().take(80).collect();
+                                let suffix = if chunk.text.len() > 80 { "…" } else { "" };
+                                println!(
+                                    "{}  [{}] {}  {:.3}\n    {}{}",
+                                    i + 1,
+                                    chunk.index,
+                                    chunk.note_path.display(),
+                                    score,
+                                    preview,
+                                    suffix
+                                );
+                            }
+                        }
+                        Err(e) => eprintln!("Error embedding query: {}", e),
+                    }
+                }
                 Err(e) => eprintln!("Error: {}", e),
             }
         }

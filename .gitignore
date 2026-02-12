@@ -1,6 +1,9 @@
 # Build artifacts
 target/
 
+# Testing artifacts
+tmp/
+
 # Agent-related docs
 PRD.md
 AGENT.md
