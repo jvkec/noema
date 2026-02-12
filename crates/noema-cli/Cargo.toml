@@ -7,3 +7,4 @@ description = "CLI entry point for the Noema backend (for dev and testing)."
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 noema-core = { path = "../noema-core" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

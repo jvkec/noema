@@ -7,7 +7,9 @@ description = "Core logic: indexing, embeddings, LLM (Ollama). No UI—used by C
 [dependencies]
 directories = "5"
 notify-debouncer-mini = "0.7"
+ollama-rs = "0.3"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 toml = "0.8"
+url = "2"
 walkdir = "2"

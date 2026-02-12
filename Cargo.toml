@@ -1,4 +1,6 @@
 # One workspace with multiple crates
+# noema-cli: just for local development and testing
+# noema-core: the core logic for indexing, embeddings, LLM (Ollama)
 [workspace]
 resolver = "2"
 members = ["crates/noema-core", "crates/noema-cli"]

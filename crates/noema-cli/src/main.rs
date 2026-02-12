@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use clap::Parser;
 use noema_core::{
     app_data_dir, chunk_notes, get_notes_root, scan_notes, set_notes_root, status, watch_notes,
+    OllamaClient,
 };
 
 #[derive(Parser)]
@@ -48,9 +49,22 @@ enum Commands {
         #[arg(value_name = "PATH")]
         path: Option<PathBuf>,
     },
+    /// Embed text with Ollama (requires Ollama running and an embedding model).
+    Embed {
+        /// Text to embed.
+        #[arg(value_name = "TEXT")]
+        text: String,
+        /// Ollama base URL (default: http://localhost:11434).
+        #[arg(long, default_value = "http://localhost:11434")]
+        url: String,
+        /// Embedding model (default: nomic-embed-text).
+        #[arg(long, default_value = "nomic-embed-text")]
+        model: String,
+    },
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let cli = Cli::parse();
 
     match cli.command.unwrap_or(Commands::Status) {
@@ -127,6 +141,19 @@ fn main() {
                 }
             }) {
                 eprintln!("Error: {}", e);
+            }
+        }
+        Commands::Embed { text, url, model } => {
+            let client = match OllamaClient::from_url(&url) {
+                Ok(c) => c.with_embed_model(&model),
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    return;
+                }
+            };
+            match client.embed(&text).await {
+                Ok(emb) => println!("Embedding: {} dimensions", emb.len()),
+                Err(e) => eprintln!("Error: {}", e),
             }
         }
     }
