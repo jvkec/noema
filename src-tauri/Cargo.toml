@@ -1,0 +1,21 @@
+# Tauri app backend. Depends on noema-core for indexing and search.
+
+[package]
+name = "noema-app"
+version = "0.1.0"
+edition = "2021"
+description = "Noema desktop app (Tauri + noema-core)"
+
+[lib]
+name = "noema_app_lib"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+noema-core = { path = "../crates/noema-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = { version = "2", features = [] }
+tokio = { version = "1", features = ["rt-multi-thread"] }

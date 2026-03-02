@@ -12,6 +12,24 @@ const CONFIG_FILENAME: &str = "config.toml";
 pub struct Config {
     /// Path to the user's notes directory (chosen by them).
     pub notes_root: Option<String>,
+    /// Optional model and query defaults.
+    #[serde(default)]
+    pub models: ModelConfig,
+}
+
+/// Optional defaults for embed and chat models, URLs, and top-k.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct ModelConfig {
+    /// Default Ollama URL for embeddings (overrides compiled default if set).
+    pub embed_url: Option<String>,
+    /// Default embedding model name for indexing/query.
+    pub embed_model: Option<String>,
+    /// Default Ollama URL for chat/completion (ask).
+    pub chat_url: Option<String>,
+    /// Default chat/completion model name for ask.
+    pub chat_model: Option<String>,
+    /// Default top-k for query/ask when not overridden.
+    pub default_k: Option<usize>,
 }
 
 /// Load config from the app data directory. Returns default config if missing or invalid.
@@ -53,6 +71,37 @@ pub fn set_notes_root(path: &Path) -> Result<(), ConfigError> {
     save_config(&config)
 }
 
+/// Set a model config key and persist. Keys: embed_url, embed_model, chat_url, chat_model, default_k.
+pub fn set_model_config(key: &str, value: &str) -> Result<(), ConfigError> {
+    let mut config = load_config();
+    match key {
+        "embed_url" => config.models.embed_url = Some(value.to_string()),
+        "embed_model" => config.models.embed_model = Some(value.to_string()),
+        "chat_url" => config.models.chat_url = Some(value.to_string()),
+        "chat_model" => config.models.chat_model = Some(value.to_string()),
+        "default_k" => {
+            let k: usize = value.parse().map_err(|_| ConfigError::InvalidDefaultK)?;
+            config.models.default_k = Some(k);
+        }
+        _ => return Err(ConfigError::UnknownConfigKey(key.to_string())),
+    }
+    save_config(&config)
+}
+
+/// Clear a model config key (set back to compiled default).
+pub fn unset_model_config(key: &str) -> Result<(), ConfigError> {
+    let mut config = load_config();
+    match key {
+        "embed_url" => config.models.embed_url = None,
+        "embed_model" => config.models.embed_model = None,
+        "chat_url" => config.models.chat_url = None,
+        "chat_model" => config.models.chat_model = None,
+        "default_k" => config.models.default_k = None,
+        _ => return Err(ConfigError::UnknownConfigKey(key.to_string())),
+    }
+    save_config(&config)
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error("could not determine app data directory")]
@@ -65,4 +114,8 @@ pub enum ConfigError {
     Canonicalize(std::io::Error),
     #[error("not a directory: {0}")]
     NotADirectory(PathBuf),
+    #[error("unknown config key: {0}. Use: embed_url, embed_model, chat_url, chat_model, default_k")]
+    UnknownConfigKey(String),
+    #[error("invalid default_k: must be a positive integer")]
+    InvalidDefaultK,
 }

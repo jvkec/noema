@@ -9,16 +9,25 @@ pub mod config;
 pub mod index;
 pub mod notes;
 pub mod ollama;
+pub mod persisted_index;
 pub mod store;
 pub mod watcher;
 
 pub use app_data::app_data_dir;
 pub use chunks::{chunk_note, chunk_notes, Chunk, DEFAULT_MAX_CHARS};
-pub use config::{get_notes_root, load_config, set_notes_root, Config, ConfigError};
+pub use config::{
+    get_notes_root, load_config, set_model_config, set_notes_root, unset_model_config, Config,
+    ConfigError, ModelConfig,
+};
 pub use index::{build_index, IndexError};
 pub use notes::{scan_notes, Note, ScanError};
-pub use ollama::{OllamaClient, OllamaError, DEFAULT_EMBED_MODEL, DEFAULT_BASE_URL};
-pub use store::{VectorStore, IndexedChunk};
+pub use ollama::{OllamaClient, OllamaError, DEFAULT_BASE_URL, DEFAULT_CHAT_MODEL, DEFAULT_EMBED_MODEL};
+pub use persisted_index::{
+    build_persisted_index, default_index_path, update_persisted_index, BuildPersistedIndexError,
+    IndexSettings, NoteState, PersistedIndex, PersistedIndexError, UpdatePersistedIndexError,
+    UpdatePersistedIndexStats, INDEX_SCHEMA_VERSION,
+};
+pub use store::{IndexedChunk, StoreError, VectorStore};
 pub use watcher::{watch_notes, WatchError};
 
 /// Returns a short status string. Used to verify the backend is wired up.

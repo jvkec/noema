@@ -1,11 +1,14 @@
 //! Ollama client for embeddings and completion. Wraps ollama-rs with a simple API.
 
 use ollama_rs::generation::embeddings::request::{EmbeddingsInput, GenerateEmbeddingsRequest};
+use ollama_rs::generation::completion::request::GenerationRequest;
 use ollama_rs::Ollama;
 use thiserror::Error;
 
 pub const DEFAULT_EMBED_MODEL: &str = "nomic-embed-text";
 pub const DEFAULT_BASE_URL: &str = "http://localhost:11434";
+/// Reasonable default chat/completion model. Can be overridden at call sites.
+pub const DEFAULT_CHAT_MODEL: &str = "llama3.1";
 
 /// Thin wrapper around Ollama for embedding and (future) completion.
 #[derive(Debug, Clone)]
@@ -64,6 +67,13 @@ impl OllamaClient {
             .await
             .map_err(OllamaError::Request)?;
         Ok(res.embeddings)
+    }
+
+    /// Generate a completion from a prompt using the given model.
+    pub async fn generate(&self, model: &str, prompt: &str) -> Result<String, OllamaError> {
+        let req = GenerationRequest::new(model.to_string(), prompt.to_string());
+        let res = self.inner.generate(req).await.map_err(OllamaError::Request)?;
+        Ok(res.response)
     }
 }
 

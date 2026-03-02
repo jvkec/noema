@@ -1,10 +1,16 @@
 //! In-memory vector store for chunk embeddings. Supports add and similarity search.
-//! No persistence; store is discarded when the process exits.
-//! TODO: add persistance with some vector db later. 
+//! Can be serialized to disk for persistence.
+
+use std::fs::File;
+use std::io::{BufReader, BufWriter};
+use std::path::Path;
+
 use crate::chunks::Chunk;
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 /// A chunk with its embedding, stored for similarity search.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexedChunk {
     pub chunk: Chunk,
     /// Normalized embedding vector (unit length for cosine similarity via dot product).
@@ -12,7 +18,7 @@ pub struct IndexedChunk {
 }
 
 /// In-memory vector store. Holds chunks and their embeddings; supports similarity search.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct VectorStore {
     items: Vec<IndexedChunk>,
 }
@@ -22,6 +28,11 @@ impl VectorStore {
         Self {
             items: Vec::new(),
         }
+    }
+
+    /// Create a store from pre-existing indexed chunks.
+    pub fn from_items(items: Vec<IndexedChunk>) -> Self {
+        Self { items }
     }
 
     /// Add a chunk with its embedding. Embedding is normalized before storage.
@@ -39,6 +50,21 @@ impl VectorStore {
         for (chunk, embedding) in chunks.into_iter().zip(embeddings) {
             self.add(chunk, embedding);
         }
+    }
+
+    /// Persist the vector store to a file path as JSON.
+    pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<(), StoreError> {
+        let file = File::create(path)?;
+        let writer = BufWriter::new(file);
+        serde_json::to_writer(writer, self).map_err(StoreError::Serialize)
+    }
+
+    /// Load a vector store from a JSON file.
+    pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, StoreError> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let store = serde_json::from_reader(reader).map_err(StoreError::Deserialize)?;
+        Ok(store)
     }
 
     /// Search for chunks most similar to the query embedding. Returns up to k results
@@ -68,6 +94,13 @@ impl VectorStore {
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
     }
+
+    /// Remove all chunks belonging to a note path. Returns number removed.
+    pub fn remove_note(&mut self, note_path: &Path) -> usize {
+        let before = self.items.len();
+        self.items.retain(|ic| ic.chunk.note_path != note_path);
+        before - self.items.len()
+    }
 }
 
 fn normalize(v: &[f32]) -> Vec<f32> {
@@ -81,4 +114,15 @@ fn normalize(v: &[f32]) -> Vec<f32> {
 fn dot(a: &[f32], b: &[f32]) -> f32 {
     let n = a.len().min(b.len());
     (0..n).map(|i| a[i] * b[i]).sum()
+}
+
+/// Errors when persisting or loading a vector store.
+#[derive(Debug, Error)]
+pub enum StoreError {
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("failed to serialize store: {0}")]
+    Serialize(serde_json::Error),
+    #[error("failed to deserialize store: {0}")]
+    Deserialize(serde_json::Error),
 }
