@@ -8,23 +8,59 @@
   </head>
   <body>
     <div id="app">
-      <header>
-        <h1>Noema</h1>
-        <p id="status" class="muted">Checking…</p>
-      </header>
-      <main>
-        <div class="search-row">
+      <header class="app-header">
+        <div class="header-left">
           <input
-            id="query"
+            id="search"
             type="search"
-            placeholder="Search your notes…"
+            placeholder="search..."
             autocomplete="off"
           />
-          <button id="search-btn">Search</button>
         </div>
-        <div id="results"></div>
+        <div class="header-right">
+          <button id="new-note-btn">+ new note</button>
+        </div>
+      </header>
+
+      <div class="status-bar">
+        <span id="status" class="muted">checking…</span>
+        <span id="save-status" class="muted"></span>
+      </div>
+
+      <main class="app-main">
+        <aside class="sidebar">
+          <div class="sidebar-header">notes</div>
+          <div id="note-tree" class="note-tree"></div>
+        </aside>
+
+        <section class="editor">
+          <input
+            id="note-title"
+            class="note-title"
+            placeholder="untitled"
+            autocomplete="off"
+          />
+          <textarea
+            id="note-body"
+            class="note-body"
+            spellcheck="false"
+          ></textarea>
+
+          <div id="search-results" class="search-results hidden"></div>
+        </section>
       </main>
+
+      <footer class="chat-bar">
+        <div id="chat-thread" class="chat-thread"></div>
+        <input
+          id="chat-input"
+          type="text"
+          placeholder="ask anything about your notes..."
+          autocomplete="off"
+        />
+      </footer>
     </div>
+
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>
