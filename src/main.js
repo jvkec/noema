@@ -10,6 +10,7 @@ const searchResultsEl = document.getElementById("search-results");
 const newNoteBtn = document.getElementById("new-note-btn");
 const chatInputEl = document.getElementById("chat-input");
 const chatThreadEl = document.getElementById("chat-thread");
+const chatModelSelectEl = document.getElementById("chat-model-select");
 
 let notes = [];
 let currentPath = null;
@@ -398,8 +399,9 @@ function bindNewNoteButton() {
 
 function bindChat() {
   if (!chatInputEl || !chatThreadEl) return;
-  chatInputEl.addEventListener("keydown", (e) => {
+  chatInputEl.addEventListener("keydown", async (e) => {
     if (e.key === "Enter") {
+      e.preventDefault();
       const text = chatInputEl.value.trim();
       if (!text) return;
       appendChatMessage("user", text);
@@ -407,13 +409,43 @@ function bindChat() {
       if (!indexUsable) {
         appendChatMessage(
           "agent",
-          "index not ready yet. run `noema init` in the CLI, then restart the app."
+          "index not built. run `noema init` in the CLI, then restart the app."
         );
-      } else {
-        appendChatMessage(
-          "agent",
-          "chat in the app is not wired yet. use `noema ask` in the CLI for now."
-        );
+        return;
+      }
+      const pending = appendChatMessage("agent", "thinking...");
+      const selectedModel =
+        (chatModelSelectEl && chatModelSelectEl.value.trim()) || "";
+      try {
+        const resp = await invoke("ask", {
+          question: text,
+          k: 6,
+          model: selectedModel || null,
+        });
+        pending?.remove();
+        if (!resp || !resp.answer) {
+          appendChatMessage(
+            "agent",
+            "no answer. check that `noema init` has been run and Ollama is running."
+          );
+          return;
+        }
+        appendChatAnswer(resp.answer, resp.sources || []);
+      } catch (err) {
+        pending?.remove();
+        const msg = String(err);
+        if (
+          msg.includes("Run `noema init` first") ||
+          msg.includes("Index is empty") ||
+          msg.includes("Could not determine index path")
+        ) {
+          indexUsable = false;
+          indexErrorMessage =
+            "index not built. run `noema init` in the CLI, then restart the app.";
+          appendChatMessage("agent", indexErrorMessage);
+        } else {
+          appendChatMessage("agent", msg);
+        }
       }
     }
   });
@@ -425,6 +457,75 @@ function appendChatMessage(kind, text) {
   div.textContent = text;
   chatThreadEl.appendChild(div);
   chatThreadEl.scrollTop = chatThreadEl.scrollHeight;
+  return div;
+}
+
+function appendChatAnswer(answer, sources) {
+  if (!chatThreadEl) return;
+  const container = document.createElement("div");
+  container.className = "chat-message agent";
+
+  const body = document.createElement("div");
+  body.className = "chat-answer-text";
+  body.textContent = answer;
+  container.appendChild(body);
+
+  if (Array.isArray(sources) && sources.length > 0) {
+    const sourcesDiv = document.createElement("div");
+    sourcesDiv.className = "chat-sources";
+
+    const label = document.createElement("span");
+    label.className = "chat-sources-label";
+    label.textContent = "sources:";
+    sourcesDiv.appendChild(label);
+
+    sources.forEach((s, idx) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "chat-source-link";
+      btn.textContent = s.title || s.note_path || `source ${idx + 1}`;
+      btn.addEventListener("click", () => {
+        if (s.note_path) {
+          openNote(s.note_path);
+        }
+      });
+      sourcesDiv.appendChild(btn);
+    });
+
+    container.appendChild(sourcesDiv);
+  }
+
+  chatThreadEl.appendChild(container);
+  chatThreadEl.scrollTop = chatThreadEl.scrollHeight;
+}
+
+async function initChatModels() {
+  if (!chatModelSelectEl) return;
+  try {
+    const models = await invoke("list_chat_models");
+    chatModelSelectEl.innerHTML = "";
+
+    const defaultOpt = document.createElement("option");
+    defaultOpt.value = "";
+    defaultOpt.textContent = "default (config)";
+    chatModelSelectEl.appendChild(defaultOpt);
+
+    if (Array.isArray(models)) {
+      models.forEach((name) => {
+        const opt = document.createElement("option");
+        opt.value = name;
+        opt.textContent = name;
+        chatModelSelectEl.appendChild(opt);
+      });
+    }
+  } catch (_e) {
+    chatModelSelectEl.innerHTML = "";
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "models unavailable";
+    chatModelSelectEl.appendChild(opt);
+    chatModelSelectEl.disabled = true;
+  }
 }
 
 async function bootstrap() {
@@ -433,6 +534,7 @@ async function bootstrap() {
   bindEditorEvents();
   bindSearchEvents();
   bindNewNoteButton();
+  await initChatModels();
   bindChat();
   await loadNotes();
 

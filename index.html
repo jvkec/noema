@@ -52,12 +52,17 @@
 
       <footer class="chat-bar">
         <div id="chat-thread" class="chat-thread"></div>
-        <input
-          id="chat-input"
-          type="text"
-          placeholder="ask anything about your notes..."
-          autocomplete="off"
-        />
+        <div class="chat-input-row">
+          <input
+            id="chat-input"
+            type="text"
+            placeholder="ask anything about your notes..."
+            autocomplete="off"
+          />
+          <select id="chat-model-select">
+            <option value="">default (config)</option>
+          </select>
+        </div>
       </footer>
     </div>
 

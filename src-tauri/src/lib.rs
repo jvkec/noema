@@ -2,10 +2,11 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use noema_core::{
     default_index_path, get_notes_root as core_get_notes_root, load_config, scan_notes, OllamaClient,
-    PersistedIndex, DEFAULT_BASE_URL, DEFAULT_EMBED_MODEL, INDEX_SCHEMA_VERSION,
+    PersistedIndex, DEFAULT_BASE_URL, DEFAULT_CHAT_MODEL, DEFAULT_EMBED_MODEL, INDEX_SCHEMA_VERSION,
 };
 use serde::Serialize;
 
@@ -84,6 +85,62 @@ pub struct QueryResult {
     pub score: f32,
     pub preview: String,
     pub text: String,
+}
+
+#[derive(Serialize)]
+pub struct AskSource {
+    pub note_path: String,
+    pub title: Option<String>,
+    pub chunk_index: usize,
+    pub score: f32,
+}
+
+#[derive(Serialize)]
+pub struct AskResponse {
+    pub question: String,
+    pub answer: String,
+    pub sources: Vec<AskSource>,
+}
+
+#[tauri::command]
+fn list_chat_models() -> Result<Vec<String>, String> {
+    let output = Command::new("ollama")
+        .arg("list")
+        .output()
+        .map_err(|e| format!("Failed to run `ollama list`: {}", e))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "`ollama list` exited with status: {}",
+            output.status
+        ));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut models = Vec::new();
+
+    for (idx, line) in stdout.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        // Skip header row if present (e.g. "NAME  SIZE  ...").
+        if idx == 0 && trimmed.to_ascii_lowercase().contains("name") {
+            continue;
+        }
+        let name = trimmed.split_whitespace().next().unwrap_or("");
+        if name.is_empty() {
+            continue;
+        }
+        let lower = name.to_ascii_lowercase();
+        // Heuristic: filter out obvious embedding models.
+        if lower.contains("embed") || lower.contains("embedding") {
+            continue;
+        }
+        models.push(name.to_string());
+    }
+
+    Ok(models)
 }
 
 #[tauri::command]
@@ -281,6 +338,143 @@ async fn query(query: String, k: Option<usize>) -> Result<Vec<QueryResult>, Stri
     Ok(results)
 }
 
+#[tauri::command]
+async fn ask(question: String, k: Option<usize>, model: Option<String>) -> Result<AskResponse, String> {
+    let index_path = default_index_path().ok_or("Could not determine index path")?;
+    let idx = PersistedIndex::load_from_file(&index_path).map_err(|e| {
+        format!(
+            "Failed to load index: {}. Run `noema init` first.",
+            e
+        )
+    })?;
+
+    if idx.schema_version != INDEX_SCHEMA_VERSION {
+        return Err("Index schema mismatch. Rebuild with `noema init`.".to_string());
+    }
+
+    if idx.store.is_empty() {
+        return Err("Index is empty. Run `noema init` to build it.".to_string());
+    }
+
+    // Determine effective top-k, honoring optional config default.
+    let cfg = load_config();
+    let mut effective_k = k.unwrap_or(6);
+    if effective_k == 6 {
+        if let Some(default_k) = cfg.models.default_k {
+            effective_k = default_k;
+        }
+    }
+
+    // Build a minimal metadata map from current notes on disk for titles.
+    use std::collections::HashMap;
+    #[derive(Clone)]
+    struct NoteMeta {
+        title: Option<String>,
+    }
+
+    let mut note_meta: HashMap<String, NoteMeta> = HashMap::new();
+    if let Ok(notes) = scan_notes(Path::new(&idx.settings.notes_root)) {
+        for n in notes {
+            if let Some(fm) = n.frontmatter.as_ref() {
+                let key = n.path.display().to_string();
+                note_meta.insert(
+                    key,
+                    NoteMeta {
+                        title: fm.title.clone(),
+                    },
+                );
+            }
+        }
+    }
+
+    // Use the index's embedding settings for query embedding.
+    let embed_client = OllamaClient::from_url(&idx.settings.ollama_url)
+        .map_err(|e| e.to_string())?
+        .with_embed_model(idx.settings.embed_model.clone());
+
+    let q_emb = embed_client
+        .embed(&question)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let raw_results = idx.store.search(&q_emb, effective_k);
+    if raw_results.is_empty() {
+        return Err("No results.".to_string());
+    }
+
+    // Build context from top chunks.
+    let mut context = String::new();
+    use std::fmt::Write as FmtWrite;
+    for (i, (chunk, score)) in raw_results.iter().enumerate() {
+        let note_key = chunk.note_path.display().to_string();
+        let title = note_meta
+            .get(&note_key)
+            .and_then(|m| m.title.as_deref())
+            .unwrap_or_else(|| note_key.as_str());
+        let _ = FmtWrite::write_fmt(
+            &mut context,
+            format_args!(
+                "[{}] {} (score {:.3})\n{}\n\n",
+                i + 1,
+                title,
+                score,
+                chunk.text
+            ),
+        );
+    }
+
+    // Resolve chat URL and model with config overrides and optional per-call model.
+    let chat_url = cfg
+        .models
+        .chat_url
+        .as_deref()
+        .unwrap_or(DEFAULT_BASE_URL)
+        .to_string();
+    let chat_model = match model {
+        Some(m) if !m.trim().is_empty() => m,
+        _ => cfg
+            .models
+            .chat_model
+            .clone()
+            .unwrap_or_else(|| DEFAULT_CHAT_MODEL.to_string()),
+    };
+
+    let chat_client = OllamaClient::from_url(&chat_url).map_err(|e| e.to_string())?;
+
+    let prompt = format!(
+        "You are Noema, a local-first knowledge assistant. Use ONLY the following note excerpts as context. If the context is insufficient, say you don't know.\n\nContext:\n{}\nQuestion:\n{}\n\nAnswer in a concise paragraph or two:\n",
+        context, question
+    );
+
+    let answer = chat_client
+        .generate(&chat_model, &prompt)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Prepare sources payload for the frontend (clickable references).
+    let sources = raw_results
+        .into_iter()
+        .map(|(chunk, score)| {
+            let note_key = chunk.note_path.display().to_string();
+            let title = note_meta
+                .get(&note_key)
+                .and_then(|m| m.title.clone());
+            AskSource {
+                note_path: note_key,
+                title,
+                chunk_index: chunk.index,
+                score,
+            }
+        })
+        .collect();
+
+    Ok(AskResponse {
+        question,
+        answer: answer.trim().to_string(),
+        sources,
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -293,7 +487,9 @@ pub fn run() {
             save_note,
             create_note,
             delete_note,
-            query
+            query,
+            ask,
+            list_chat_models
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
