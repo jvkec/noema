@@ -9,11 +9,16 @@
   <body>
     <div id="app">
       <header class="app-header">
+        <div class="brand-block">
+          <div class="app-brand">Noema</div>
+          <div class="app-tagline">local-first life repo</div>
+        </div>
         <div class="header-left">
+          <label for="search" class="sr-only">Search notes</label>
           <input
             id="search"
             type="search"
-            placeholder="search..."
+            placeholder="Search your life repo..."
             autocomplete="off"
           />
         </div>
@@ -23,23 +28,48 @@
       </header>
 
       <div class="status-bar">
-        <span id="status" class="muted">checking…</span>
-        <span id="save-status" class="muted"></span>
+        <span id="status" class="muted" aria-live="polite">checking…</span>
+        <span id="save-status" class="muted" aria-live="polite"></span>
       </div>
 
       <main class="app-main">
         <aside class="sidebar">
-          <div class="sidebar-header">notes</div>
+          <div class="sidebar-header">life lenses</div>
+          <div id="lens-list" class="lens-list"></div>
+          <div id="life-summary" class="life-summary muted"></div>
+          <div class="sidebar-header notes-header">notes</div>
           <div id="note-tree" class="note-tree"></div>
         </aside>
 
         <section class="editor">
+          <section id="life-cues" class="life-cues">
+            <div class="cue-column">
+              <div class="cue-title">memory cues</div>
+              <div id="memory-list" class="memory-list"></div>
+            </div>
+            <div class="cue-column">
+              <div class="cue-title">capture rituals</div>
+              <div id="capture-rituals" class="capture-rituals">
+                <button type="button" class="ritual-btn" data-template="reflection">
+                  daily reflection
+                </button>
+                <button type="button" class="ritual-btn" data-template="decision">
+                  decision log
+                </button>
+                <button type="button" class="ritual-btn" data-template="snapshot">
+                  memory snapshot
+                </button>
+              </div>
+            </div>
+          </section>
+          <label for="note-title" class="sr-only">Note title</label>
           <input
             id="note-title"
             class="note-title"
             placeholder="untitled"
             autocomplete="off"
           />
+          <label for="note-body" class="sr-only">Note body</label>
           <textarea
             id="note-body"
             class="note-body"
@@ -53,18 +83,34 @@
       <footer class="chat-bar">
         <div id="chat-thread" class="chat-thread"></div>
         <div class="chat-input-row">
+          <label for="chat-input" class="sr-only">Ask AI about your notes</label>
           <input
             id="chat-input"
             type="text"
             placeholder="ask anything about your notes..."
             autocomplete="off"
           />
+          <label for="chat-model-select" class="sr-only">Model</label>
           <select id="chat-model-select">
             <option value="">default (config)</option>
           </select>
         </div>
       </footer>
     </div>
+
+    <dialog id="delete-dialog" class="delete-dialog">
+      <form method="dialog" class="delete-dialog-content">
+        <h2 class="delete-dialog-title">Delete note?</h2>
+        <p class="delete-dialog-copy">
+          This cannot be undone.
+          <span id="delete-note-name" class="delete-note-name"></span>
+        </p>
+        <div class="delete-dialog-actions">
+          <button id="delete-cancel-btn" type="submit" value="cancel">Cancel</button>
+          <button id="delete-confirm-btn" type="button">Delete</button>
+        </div>
+      </form>
+    </dialog>
 
     <script type="module" src="/src/main.js"></script>
   </body>

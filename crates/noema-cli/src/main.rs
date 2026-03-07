@@ -7,14 +7,15 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use clap::Parser;
+use noema_core::{
+    app_data_dir, build_index, build_memory_overview, build_persisted_index, chunk_notes,
+    default_index_path, get_notes_root, load_config, scan_notes, set_model_config, set_notes_root,
+    status, unset_model_config, update_persisted_index, watch_notes, IndexSettings, OllamaClient,
+    PersistedIndex, DEFAULT_BASE_URL, DEFAULT_CHAT_MODEL, DEFAULT_EMBED_MODEL,
+    INDEX_SCHEMA_VERSION,
+};
 use serde::Serialize;
 use std::fmt::Write;
-use noema_core::{
-    app_data_dir, build_index, build_persisted_index, chunk_notes, default_index_path,
-    get_notes_root, load_config, scan_notes, set_model_config, set_notes_root, unset_model_config,
-    status, update_persisted_index, watch_notes, IndexSettings, OllamaClient, PersistedIndex,
-    DEFAULT_BASE_URL, DEFAULT_CHAT_MODEL, DEFAULT_EMBED_MODEL, INDEX_SCHEMA_VERSION,
-};
 
 #[derive(Parser)]
 #[command(name = "noema")]
@@ -59,6 +60,18 @@ enum Commands {
         /// Max characters per chunk (default: 512).
         #[arg(long, default_value = "512")]
         max_chars: usize,
+    },
+    /// Build memory cards from notes (life signals + salience ranking).
+    Memory {
+        /// Root directory to scan (optional; uses configured root if omitted).
+        #[arg(value_name = "PATH")]
+        path: Option<PathBuf>,
+        /// Max memory cards to return.
+        #[arg(long, short, default_value = "8")]
+        limit: usize,
+        /// Output JSON.
+        #[arg(long, default_value_t = false)]
+        json: bool,
     },
     /// Watch notes directory and re-scan when files change. Ctrl+C to stop.
     Watch {
@@ -222,12 +235,10 @@ async fn main() {
             println!("Noema backend");
             println!("  core: {}", status());
         }
-        Commands::DataDir => {
-            match app_data_dir() {
-                Some(p) => println!("{}", p.display()),
-                None => eprintln!("Could not determine app data directory."),
-            }
-        }
+        Commands::DataDir => match app_data_dir() {
+            Some(p) => println!("{}", p.display()),
+            None => eprintln!("Could not determine app data directory."),
+        },
         Commands::ShowRoot => match get_notes_root() {
             Some(p) => println!("{}", p.display()),
             None => eprintln!("No notes root configured."),
@@ -236,12 +247,10 @@ async fn main() {
             Some(p) => println!("{}", p.display()),
             None => eprintln!("Could not determine app data directory."),
         },
-        Commands::SetRoot { path } => {
-            match set_notes_root(&path) {
-                Ok(()) => println!("Notes root set to {}", path.display()),
-                Err(e) => eprintln!("Error: {}", e),
-            }
-        }
+        Commands::SetRoot { path } => match set_notes_root(&path) {
+            Ok(()) => println!("Notes root set to {}", path.display()),
+            Err(e) => eprintln!("Error: {}", e),
+        },
         Commands::Config { sub } => match sub {
             ConfigSub::Show => {
                 let cfg = load_config();
@@ -252,18 +261,14 @@ async fn main() {
                 println!("chat_model: {:?}", cfg.models.chat_model);
                 println!("default_k: {:?}", cfg.models.default_k);
             }
-            ConfigSub::Set { key, value } => {
-                match set_model_config(&key, &value) {
-                    Ok(()) => println!("Set {} = {}", key, value),
-                    Err(e) => eprintln!("Error: {}", e),
-                }
-            }
-            ConfigSub::Unset { key } => {
-                match unset_model_config(&key) {
-                    Ok(()) => println!("Unset {}", key),
-                    Err(e) => eprintln!("Error: {}", e),
-                }
-            }
+            ConfigSub::Set { key, value } => match set_model_config(&key, &value) {
+                Ok(()) => println!("Set {} = {}", key, value),
+                Err(e) => eprintln!("Error: {}", e),
+            },
+            ConfigSub::Unset { key } => match unset_model_config(&key) {
+                Ok(()) => println!("Unset {}", key),
+                Err(e) => eprintln!("Error: {}", e),
+            },
         },
         Commands::Scan { path } => {
             let root = path.or_else(get_notes_root);
@@ -280,8 +285,11 @@ async fn main() {
                             .as_ref()
                             .and_then(|fm| fm.title.as_deref())
                             .unwrap_or_else(|| n.body.lines().next().unwrap_or("").trim());
-                        let preview =
-                            if title.len() > 60 { format!("{}...", &title[..60]) } else { title.to_string() };
+                        let preview = if title.len() > 60 {
+                            format!("{}...", &title[..60])
+                        } else {
+                            title.to_string()
+                        };
                         println!("  {}  {}", n.path.display(), preview);
                     }
                 }
@@ -297,14 +305,70 @@ async fn main() {
             match scan_notes(&root) {
                 Ok(notes) => {
                     let chunks = chunk_notes(&notes, max_chars);
-                    println!("Chunked {} note(s) into {} chunk(s) (max {} chars)", notes.len(), chunks.len(), max_chars);
+                    println!(
+                        "Chunked {} note(s) into {} chunk(s) (max {} chars)",
+                        notes.len(),
+                        chunks.len(),
+                        max_chars
+                    );
                     for c in chunks.iter().take(10) {
                         let preview: String = c.text.chars().take(50).collect();
                         let suffix = if c.text.len() > 50 { "…" } else { "" };
-                        println!("  [{}] {}  {}{}", c.index, c.note_path.display(), preview, suffix);
+                        println!(
+                            "  [{}] {}  {}{}",
+                            c.index,
+                            c.note_path.display(),
+                            preview,
+                            suffix
+                        );
                     }
                     if chunks.len() > 10 {
                         println!("  ... and {} more", chunks.len() - 10);
+                    }
+                }
+                Err(e) => eprintln!("Error: {}", e),
+            }
+        }
+        Commands::Memory { path, limit, json } => {
+            let root = path.or_else(get_notes_root);
+            let Some(root) = root else {
+                eprintln!("No notes root configured. Run: noema set-root <PATH>");
+                return;
+            };
+            match scan_notes(&root) {
+                Ok(notes) => {
+                    let overview = build_memory_overview(&notes, limit);
+                    if json {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&overview)
+                                .unwrap_or_else(|_| "{}".to_string())
+                        );
+                    } else {
+                        println!(
+                            "Memory overview ({} cards) [{} notes scanned]",
+                            overview.cards.len(),
+                            notes.len()
+                        );
+                        for (idx, card) in overview.cards.iter().enumerate() {
+                            let areas = card
+                                .life_areas
+                                .iter()
+                                .map(|a| a.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            println!(
+                                "{}. {}  (salience {:.3})",
+                                idx + 1,
+                                card.title,
+                                card.salience
+                            );
+                            println!("   path: {}", card.note_path);
+                            println!("   areas: {}", areas);
+                            if !card.rationale.is_empty() {
+                                println!("   why: {}", card.rationale.join("; "));
+                            }
+                        }
                     }
                 }
                 Err(e) => eprintln!("Error: {}", e),
@@ -487,7 +551,10 @@ async fn main() {
                 }
             };
             match build_index(&root, &client, Some(max_chars)).await {
-                Ok(store) => println!("Indexed {} chunk(s) (in memory, no persistence)", store.len()),
+                Ok(store) => println!(
+                    "Indexed {} chunk(s) (in memory, no persistence)",
+                    store.len()
+                ),
                 Err(e) => eprintln!("Error: {}", e),
             }
         }
@@ -512,27 +579,25 @@ async fn main() {
                 }
             };
             match build_index(&root, &client, Some(max_chars)).await {
-                Ok(store) => {
-                    match client.embed(&query).await {
-                        Ok(q_emb) => {
-                            let results = store.search(&q_emb, k);
-                            for (i, (chunk, score)) in results.iter().enumerate() {
-                                let preview: String = chunk.text.chars().take(80).collect();
-                                let suffix = if chunk.text.len() > 80 { "…" } else { "" };
-                                println!(
-                                    "{}  [{}] {}  {:.3}\n    {}{}",
-                                    i + 1,
-                                    chunk.index,
-                                    chunk.note_path.display(),
-                                    score,
-                                    preview,
-                                    suffix
-                                );
-                            }
+                Ok(store) => match client.embed(&query).await {
+                    Ok(q_emb) => {
+                        let results = store.search(&q_emb, k);
+                        for (i, (chunk, score)) in results.iter().enumerate() {
+                            let preview: String = chunk.text.chars().take(80).collect();
+                            let suffix = if chunk.text.len() > 80 { "…" } else { "" };
+                            println!(
+                                "{}  [{}] {}  {:.3}\n    {}{}",
+                                i + 1,
+                                chunk.index,
+                                chunk.note_path.display(),
+                                score,
+                                preview,
+                                suffix
+                            );
                         }
-                        Err(e) => eprintln!("Error embedding query: {}", e),
                     }
-                }
+                    Err(e) => eprintln!("Error embedding query: {}", e),
+                },
                 Err(e) => eprintln!("Error: {}", e),
             }
         }
@@ -552,7 +617,9 @@ async fn main() {
             } else if let Some(existing) = get_notes_root() {
                 existing
             } else {
-                eprintln!("No notes root configured. Run: noema init <PATH> or noema set-root <PATH>");
+                eprintln!(
+                    "No notes root configured. Run: noema init <PATH> or noema set-root <PATH>"
+                );
                 return;
             };
 
@@ -672,7 +739,9 @@ async fn main() {
                 }
             }
 
-            if idx.settings.ollama_url != effective_url || idx.settings.embed_model != effective_model {
+            if idx.settings.ollama_url != effective_url
+                || idx.settings.embed_model != effective_model
+            {
                 eprintln!(
                     "Warning: querying with Ollama settings that differ from the index.\n  index: url={}, model={}\n  query: url={}, model={}",
                     idx.settings.ollama_url, idx.settings.embed_model, url, model
@@ -779,8 +848,10 @@ async fn main() {
                                 results: Vec<JsonNote>,
                             }
 
-                            let mut grouped: BTreeMap<String, (f32, Vec<(usize, &noema_core::Chunk, f32)>)> =
-                                BTreeMap::new();
+                            let mut grouped: BTreeMap<
+                                String,
+                                (f32, Vec<(usize, &noema_core::Chunk, f32)>),
+                            > = BTreeMap::new();
                             for (chunk, score) in &results {
                                 let key = chunk.note_path.display().to_string();
                                 let entry = grouped.entry(key).or_insert((0.0, Vec::new()));
@@ -793,7 +864,9 @@ async fn main() {
                             let mut notes_vec: Vec<JsonNote> = grouped
                                 .into_iter()
                                 .map(|(note_path, (score, mut chs))| {
-                                    chs.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+                                    chs.sort_by(|a, b| {
+                                        b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal)
+                                    });
                                     chs.truncate(per_note_chunks);
                                     let chunks = chs
                                         .into_iter()
@@ -802,7 +875,8 @@ async fn main() {
                                             chunk_index: idx_i,
                                             score: s,
                                             preview: {
-                                                let mut p: String = ch.text.chars().take(80).collect();
+                                                let mut p: String =
+                                                    ch.text.chars().take(80).collect();
                                                 if ch.text.chars().count() > 80 {
                                                     p.push('…');
                                                 }
@@ -812,7 +886,9 @@ async fn main() {
                                         .collect();
                                     let meta = note_meta.get(&note_path);
                                     let (title, date, tags) = match meta {
-                                        Some(m) => (m.title.clone(), m.date.clone(), m.tags.clone()),
+                                        Some(m) => {
+                                            (m.title.clone(), m.date.clone(), m.tags.clone())
+                                        }
                                         None => (None, None, Vec::new()),
                                     };
                                     JsonNote {
@@ -899,8 +975,10 @@ async fn main() {
                             }
                         }
                     } else if by_note {
-                        let mut grouped: BTreeMap<String, (f32, Vec<(usize, &noema_core::Chunk, f32)>)> =
-                            BTreeMap::new();
+                        let mut grouped: BTreeMap<
+                            String,
+                            (f32, Vec<(usize, &noema_core::Chunk, f32)>),
+                        > = BTreeMap::new();
                         for (chunk, score) in &results {
                             let key = chunk.note_path.display().to_string();
                             let entry = grouped.entry(key).or_insert((0.0, Vec::new()));
@@ -910,21 +988,22 @@ async fn main() {
                             entry.1.push((chunk.index, chunk, *score));
                         }
 
-                        let mut notes_vec: Vec<(String, f32, Vec<(usize, &noema_core::Chunk, f32)>)> =
-                            grouped
-                                .into_iter()
-                                .map(|(note_path, (score, mut chs))| {
-                                    chs.sort_by(|a, b| {
-                                        b.2.partial_cmp(&a.2)
-                                            .unwrap_or(std::cmp::Ordering::Equal)
-                                    });
-                                    chs.truncate(per_note_chunks);
-                                    (note_path, score, chs)
-                                })
-                                .collect();
+                        let mut notes_vec: Vec<(
+                            String,
+                            f32,
+                            Vec<(usize, &noema_core::Chunk, f32)>,
+                        )> = grouped
+                            .into_iter()
+                            .map(|(note_path, (score, mut chs))| {
+                                chs.sort_by(|a, b| {
+                                    b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal)
+                                });
+                                chs.truncate(per_note_chunks);
+                                (note_path, score, chs)
+                            })
+                            .collect();
                         notes_vec.sort_by(|a, b| {
-                            b.1.partial_cmp(&a.1)
-                                .unwrap_or(std::cmp::Ordering::Equal)
+                            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
                         });
 
                         for (i, (note_path, score, chs)) in notes_vec.iter().enumerate() {
@@ -933,7 +1012,15 @@ async fn main() {
                                 let date = meta.date.as_deref().unwrap_or("");
                                 if !title.is_empty() || !date.is_empty() {
                                     println!("{}  {}  {:.3}", i + 1, note_path, score);
-                                    println!("    {}{}", title, if !date.is_empty() { format!(" [{}]", date) } else { "".to_string() });
+                                    println!(
+                                        "    {}{}",
+                                        title,
+                                        if !date.is_empty() {
+                                            format!(" [{}]", date)
+                                        } else {
+                                            "".to_string()
+                                        }
+                                    );
                                 } else {
                                     println!("{}  {}  {:.3}", i + 1, note_path, score);
                                 }
@@ -947,16 +1034,17 @@ async fn main() {
                                 } else {
                                     ""
                                 };
-                                println!(
-                                    "    [{}] {:.3}  {}{}",
-                                    idx_i, s, preview, suffix
-                                );
+                                println!("    [{}] {:.3}  {}{}", idx_i, s, preview, suffix);
                             }
                         }
                     } else {
                         for (i, (chunk, score)) in results.iter().enumerate() {
                             let preview: String = chunk.text.chars().take(80).collect();
-                            let suffix = if chunk.text.chars().count() > 80 { "…" } else { "" };
+                            let suffix = if chunk.text.chars().count() > 80 {
+                                "…"
+                            } else {
+                                ""
+                            };
                             println!(
                                 "{}  [{}] {}  {:.3}\n    {}{}",
                                 i + 1,
@@ -975,21 +1063,16 @@ async fn main() {
                             let top = results
                                 .iter()
                                 .max_by(|a, b| {
-                                    a.1.partial_cmp(&b.1)
-                                        .unwrap_or(std::cmp::Ordering::Equal)
+                                    a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
                                 })
                                 .map(|(chunk, _)| chunk.note_path.clone());
                             top
                         } else {
-                            results
-                                .get(0)
-                                .map(|(chunk, _)| chunk.note_path.clone())
+                            results.get(0).map(|(chunk, _)| chunk.note_path.clone())
                         };
 
                         if let Some(path) = path_to_open {
-                            if let Err(e) =
-                                std::process::Command::new("open").arg(&path).spawn()
-                            {
+                            if let Err(e) = std::process::Command::new("open").arg(&path).spawn() {
                                 eprintln!("Error opening note {}: {}", path.display(), e);
                             }
                         } else {
@@ -1233,7 +1316,13 @@ async fn main() {
                     let title = meta
                         .and_then(|m| m.title.as_deref())
                         .unwrap_or_else(|| note_key.as_str());
-                    println!("{}  {}  [{:.3}]  chunk {}", i + 1, title, score, chunk.index);
+                    println!(
+                        "{}  {}  [{:.3}]  chunk {}",
+                        i + 1,
+                        title,
+                        score,
+                        chunk.index
+                    );
                 }
             }
         }

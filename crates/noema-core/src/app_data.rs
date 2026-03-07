@@ -8,7 +8,9 @@ use std::path::PathBuf;
 /// On macOS: `~/Library/Application Support/Noema/`.
 /// Creates the directory if it doesn't exist; returns `None` if we can't determine the path.
 pub fn app_data_dir() -> Option<PathBuf> {
-    let dir = directories::ProjectDirs::from("app", "Noema", "Noema")?.data_local_dir().to_path_buf();
+    let dir = directories::ProjectDirs::from("app", "Noema", "Noema")?
+        .data_local_dir()
+        .to_path_buf();
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir)
 }

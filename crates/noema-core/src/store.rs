@@ -25,9 +25,7 @@ pub struct VectorStore {
 
 impl VectorStore {
     pub fn new() -> Self {
-        Self {
-            items: Vec::new(),
-        }
+        Self { items: Vec::new() }
     }
 
     /// Create a store from pre-existing indexed chunks.

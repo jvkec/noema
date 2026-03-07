@@ -3,14 +3,21 @@ import { invoke } from "@tauri-apps/api/core";
 const statusEl = document.getElementById("status");
 const saveStatusEl = document.getElementById("save-status");
 const noteTreeEl = document.getElementById("note-tree");
+const lensListEl = document.getElementById("lens-list");
+const lifeSummaryEl = document.getElementById("life-summary");
 const noteTitleEl = document.getElementById("note-title");
 const noteBodyEl = document.getElementById("note-body");
 const searchInputEl = document.getElementById("search");
 const searchResultsEl = document.getElementById("search-results");
 const newNoteBtn = document.getElementById("new-note-btn");
+const memoryListEl = document.getElementById("memory-list");
+const captureRitualsEl = document.getElementById("capture-rituals");
 const chatInputEl = document.getElementById("chat-input");
 const chatThreadEl = document.getElementById("chat-thread");
 const chatModelSelectEl = document.getElementById("chat-model-select");
+const deleteDialogEl = document.getElementById("delete-dialog");
+const deleteConfirmBtn = document.getElementById("delete-confirm-btn");
+const deleteNoteNameEl = document.getElementById("delete-note-name");
 
 let notes = [];
 let currentPath = null;
@@ -20,6 +27,96 @@ let searchTimer = null;
 let expandedFolders = new Set();
 let indexUsable = true;
 let indexErrorMessage = null;
+let activeLens = "all";
+let pendingDeletePath = null;
+let memoryCards = [];
+let memoryEngineMessage = null;
+const LIFE_LENSES = [
+  {
+    id: "all",
+    label: "all life",
+    keywords: [],
+  },
+  {
+    id: "self",
+    label: "self",
+    keywords: ["journal", "reflect", "mind", "self", "emotion", "personal"],
+  },
+  {
+    id: "work",
+    label: "work",
+    keywords: ["work", "career", "project", "meeting", "client", "task"],
+  },
+  {
+    id: "health",
+    label: "health",
+    keywords: ["health", "fitness", "sleep", "workout", "meal", "run", "meditation"],
+  },
+  {
+    id: "relationships",
+    label: "relationships",
+    keywords: ["family", "friend", "partner", "relationship", "team", "people"],
+  },
+  {
+    id: "money",
+    label: "money",
+    keywords: ["money", "finance", "budget", "expense", "invest", "salary"],
+  },
+  {
+    id: "home",
+    label: "home",
+    keywords: ["home", "house", "admin", "errand", "chore", "life"],
+  },
+  {
+    id: "ideas",
+    label: "ideas",
+    keywords: ["idea", "research", "learn", "reading", "writing", "build"],
+  },
+];
+
+function inferLensForNote(note) {
+  const text = `${note.path} ${note.title || ""}`.toLowerCase();
+  for (const lens of LIFE_LENSES) {
+    if (lens.id === "all") continue;
+    if (lens.keywords.some((kw) => text.includes(kw))) {
+      return lens.id;
+    }
+  }
+  return "ideas";
+}
+
+function getFilteredNotes() {
+  if (activeLens === "all") return notes;
+  return notes.filter((n) => inferLensForNote(n) === activeLens);
+}
+
+function renderLifeLenses() {
+  if (!lensListEl) return;
+  const counts = {};
+  LIFE_LENSES.forEach((l) => {
+    counts[l.id] = 0;
+  });
+  counts.all = notes.length;
+  notes.forEach((n) => {
+    const lens = inferLensForNote(n);
+    counts[lens] = (counts[lens] || 0) + 1;
+  });
+  lensListEl.innerHTML = LIFE_LENSES.map((l) => {
+    const isActive = l.id === activeLens ? " active" : "";
+    return `<button type="button" class="lens-btn${isActive}" data-lens="${l.id}">
+      <span>${escapeHtml(l.label)}</span>
+      <span class="lens-count">${counts[l.id] || 0}</span>
+    </button>`;
+  }).join("");
+
+  if (lifeSummaryEl) {
+    const visible = getFilteredNotes().length;
+    lifeSummaryEl.textContent =
+      activeLens === "all"
+        ? `${notes.length} total notes`
+        : `${visible} notes in ${activeLens}`;
+  }
+}
 
 function setStatus(text, isError = false) {
   if (!statusEl) return;
@@ -95,10 +192,10 @@ function renderTreeLevel(node, folderPathPrefix = "") {
       const pathKey = folderPathPrefix ? `${folderPathPrefix}/${c.name}` : c.name;
       const isExpanded = expandedFolders.has(pathKey);
       parts.push(
-        `<div class="tree-folder" data-folder="${encodeURIComponent(pathKey)}" role="button">
+        `<button type="button" class="tree-folder" data-folder="${encodeURIComponent(pathKey)}">
           <span class="tree-folder-prefix">${isExpanded ? "v" : ">"}</span>
           <span class="tree-folder-name">${escapeHtml(c.name)}</span>
-        </div>`
+        </button>`
       );
       if (isExpanded) {
         const childHtml = renderTreeLevel(c, pathKey);
@@ -109,10 +206,14 @@ function renderTreeLevel(node, folderPathPrefix = "") {
     } else {
       const active = c.path === currentPath ? " active" : "";
       parts.push(
-        `<div class="tree-note${active}" data-path="${encodeURIComponent(c.path)}" role="button">
-          <span class="tree-note-prefix">—</span>
-          <span class="tree-note-title" title="${escapeHtml(c.path)}">${escapeHtml(c.name)}</span>
-          <button class="tree-note-delete" data-path="${encodeURIComponent(c.path)}">×</button>
+        `<div class="tree-note${active}">
+          <button type="button" class="tree-note-open" data-path="${encodeURIComponent(c.path)}">
+            <span class="tree-note-prefix">—</span>
+            <span class="tree-note-title" title="${escapeHtml(c.path)}">${escapeHtml(c.name)}</span>
+          </button>
+          <button type="button" class="tree-note-delete" aria-label="Delete note ${escapeHtml(
+            c.name
+          )}" data-path="${encodeURIComponent(c.path)}">×</button>
         </div>`
       );
     }
@@ -126,6 +227,11 @@ function renderNoteTree() {
     noteTreeEl.innerHTML = `<div class="muted">no notes yet. press + new note.</div>`;
     return;
   }
+  const filtered = getFilteredNotes();
+  if (!filtered.length) {
+    noteTreeEl.innerHTML = `<div class="muted">no notes in this lens. choose another lens.</div>`;
+    return;
+  }
   // Keep ancestors of current note expanded so it stays visible
   if (currentPath) {
     const parts = currentPath.split("/");
@@ -133,7 +239,7 @@ function renderNoteTree() {
       expandedFolders.add(parts.slice(0, i).join("/"));
     }
   }
-  const tree = buildNoteTree(notes);
+  const tree = buildNoteTree(filtered);
   noteTreeEl.innerHTML = renderTreeLevel(tree);
 }
 
@@ -142,10 +248,10 @@ function bindNoteTreeEvents() {
   noteTreeEl.addEventListener("click", async (e) => {
     const target = e.target;
     if (!(target instanceof HTMLElement)) return;
-    const deletePath = target.dataset.path;
-    if (target.classList.contains("tree-note-delete") && deletePath) {
+    const deletePath = target.closest(".tree-note-delete")?.dataset.path;
+    if (target.closest(".tree-note-delete") && deletePath) {
       e.stopPropagation();
-      await deleteNote(decodeURIComponent(deletePath));
+      showDeleteDialog(decodeURIComponent(deletePath));
       return;
     }
     const folderKey = target.closest(".tree-folder")?.dataset.folder;
@@ -159,12 +265,9 @@ function bindNoteTreeEvents() {
       renderNoteTree();
       return;
     }
-    const noteRow = target.closest(".tree-note");
-    if (noteRow) {
-      const path = noteRow.dataset.path;
-      if (path) {
-        await openNote(decodeURIComponent(path));
-      }
+    const notePath = target.closest(".tree-note-open")?.dataset.path;
+    if (notePath) {
+      await openNote(decodeURIComponent(notePath));
     }
   });
 }
@@ -173,6 +276,9 @@ async function loadNotes() {
   try {
     const list = await invoke("list_notes");
     notes = Array.isArray(list) ? list : [];
+    await refreshMemoryOverview();
+    renderLifeLenses();
+    renderMemoryCues();
     renderNoteTree();
     if (!currentPath && notes.length > 0) {
       await openNote(notes[0].path);
@@ -269,11 +375,66 @@ function scheduleSave() {
         notes[idx].title = noteTitleEl.value || notes[idx].path;
         renderNoteTree();
       }
+      await refreshMemoryOverview();
+      renderLifeLenses();
+      renderMemoryCues();
     } catch (e) {
       setSaveStatus("save failed");
       setStatus(String(e), true);
     }
   }, 500);
+}
+
+async function refreshMemoryOverview() {
+  try {
+    const overview = await invoke("memory_overview", { limit: 8 });
+    memoryCards =
+      overview && Array.isArray(overview.cards) ? overview.cards : [];
+    memoryEngineMessage = null;
+  } catch (e) {
+    memoryCards = [];
+    memoryEngineMessage = String(e);
+  }
+}
+
+function renderMemoryCues() {
+  if (!memoryListEl) return;
+  if (memoryEngineMessage) {
+    memoryListEl.innerHTML = `<div class="error">${escapeHtml(
+      memoryEngineMessage
+    )}</div>`;
+    return;
+  }
+  if (!memoryCards.length) {
+    memoryListEl.innerHTML = `<div class="muted">start by creating your first note.</div>`;
+    return;
+  }
+
+  memoryListEl.innerHTML = memoryCards
+    .map((card) => {
+      const areas = Array.isArray(card.life_areas)
+        ? card.life_areas.join(" · ")
+        : "";
+      const why =
+        Array.isArray(card.rationale) && card.rationale.length > 0
+          ? card.rationale[0]
+          : "ranked by memory salience";
+      const salience =
+        typeof card.salience === "number"
+          ? `${(card.salience * 100).toFixed(0)}%`
+          : "";
+      return `<button type="button" class="memory-item memory-card" data-open-path="${encodeURIComponent(
+        card.note_path || ""
+      )}">
+        <span class="memory-item-title">${escapeHtml(
+          card.title || card.note_path || "untitled"
+        )}</span>
+        <span class="memory-item-meta">${escapeHtml(areas)}</span>
+        <span class="memory-item-why">${escapeHtml(why)}</span>
+        <span class="memory-item-score">${escapeHtml(salience)}</span>
+      </button>`;
+    })
+    .join("");
 }
 
 function escapeHtml(s) {
@@ -302,11 +463,11 @@ function renderSearchResults(results, query) {
         highlighted = `${before}<span class="highlight">${match}</span>${after}`;
       }
       return `
-        <div class="search-result-item" data-path="${encodeURIComponent(r.note_path)}">
+        <button type="button" class="search-result-item" data-path="${encodeURIComponent(r.note_path)}">
           <div class="search-result-path">${escapeHtml(r.note_path)}</div>
           <p class="search-result-preview">${highlighted}</p>
           <div class="search-result-score">${(r.score * 100).toFixed(0)}%</div>
-        </div>
+        </button>
       `;
     })
     .join("");
@@ -379,6 +540,107 @@ function bindSearchEvents() {
       }
     });
   }
+}
+
+function bindLifeLensEvents() {
+  if (!lensListEl) return;
+  lensListEl.addEventListener("click", (e) => {
+    const target = e.target;
+    if (!(target instanceof HTMLElement)) return;
+    const lens = target.closest(".lens-btn")?.dataset.lens;
+    if (!lens) return;
+    activeLens = lens;
+    renderLifeLenses();
+    renderNoteTree();
+  });
+}
+
+function bindMemoryCueEvents() {
+  if (!memoryListEl) return;
+  memoryListEl.addEventListener("click", async (e) => {
+    const target = e.target;
+    if (!(target instanceof HTMLElement)) return;
+    const path = target.closest(".memory-item")?.dataset.openPath;
+    if (!path) return;
+    await openNote(decodeURIComponent(path));
+  });
+}
+
+function getCaptureTemplate(kind) {
+  const date = new Date().toISOString().slice(0, 10);
+  if (kind === "reflection") {
+    return {
+      title: `Reflection - ${date}`,
+      body: "What happened?\n\nWhat mattered?\n\nWhat to carry forward?",
+    };
+  }
+  if (kind === "decision") {
+    return {
+      title: `Decision Log - ${date}`,
+      body: "Decision:\n\nContext:\n\nOptions considered:\n\nWhy this choice:\n\nFollow-up date:",
+    };
+  }
+  return {
+    title: `Memory Snapshot - ${date}`,
+    body: "Moment:\n\nWho was there:\n\nWhy this might matter later:\n\n1 sentence summary:",
+  };
+}
+
+async function createTemplatedNote(kind) {
+  try {
+    const detail = await invoke("create_note");
+    const template = getCaptureTemplate(kind);
+    await invoke("save_note", {
+      path: detail.path,
+      title: template.title,
+      body: template.body,
+    });
+    await loadNotes();
+    await openNote(detail.path);
+    focusTitle();
+  } catch (e) {
+    setStatus(String(e), true);
+  }
+}
+
+function bindCaptureRituals() {
+  if (!captureRitualsEl) return;
+  captureRitualsEl.addEventListener("click", async (e) => {
+    const target = e.target;
+    if (!(target instanceof HTMLElement)) return;
+    const kind = target.closest(".ritual-btn")?.dataset.template;
+    if (!kind) return;
+    await createTemplatedNote(kind);
+  });
+}
+
+function showDeleteDialog(path) {
+  pendingDeletePath = path;
+  if (deleteNoteNameEl) {
+    deleteNoteNameEl.textContent = ` (${path})`;
+  }
+  if (deleteDialogEl && typeof deleteDialogEl.showModal === "function") {
+    deleteDialogEl.showModal();
+    return;
+  }
+  if (window.confirm(`Delete this note?\n${path}`)) {
+    deleteNote(path);
+  }
+}
+
+function bindDeleteDialog() {
+  if (!deleteDialogEl || !deleteConfirmBtn) return;
+  deleteConfirmBtn.addEventListener("click", async () => {
+    const toDelete = pendingDeletePath;
+    pendingDeletePath = null;
+    deleteDialogEl.close("confirm");
+    if (toDelete) {
+      await deleteNote(toDelete);
+    }
+  });
+  deleteDialogEl.addEventListener("close", () => {
+    pendingDeletePath = null;
+  });
 }
 
 function bindEditorEvents() {
@@ -533,6 +795,10 @@ async function bootstrap() {
   bindNoteTreeEvents();
   bindEditorEvents();
   bindSearchEvents();
+  bindLifeLensEvents();
+  bindMemoryCueEvents();
+  bindCaptureRituals();
+  bindDeleteDialog();
   bindNewNoteButton();
   await initChatModels();
   bindChat();

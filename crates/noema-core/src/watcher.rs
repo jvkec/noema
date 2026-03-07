@@ -4,8 +4,8 @@ use std::path::Path;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use notify_debouncer_mini::{new_debouncer, DebounceEventResult};
 use notify_debouncer_mini::notify;
+use notify_debouncer_mini::{new_debouncer, DebounceEventResult};
 
 use crate::notes::{scan_notes, Note};
 
@@ -22,14 +22,12 @@ pub fn watch_notes(
     let root_for_callback = root.clone();
 
     let debounce = Duration::from_millis(400);
-    let mut debouncer = new_debouncer(debounce, move |res: DebounceEventResult| {
-        match res {
-            Ok(_) => {
-                let notes = scan_notes(&root_for_callback);
-                on_change(notes);
-            }
-            Err(e) => eprintln!("Watcher error: {}", e),
+    let mut debouncer = new_debouncer(debounce, move |res: DebounceEventResult| match res {
+        Ok(_) => {
+            let notes = scan_notes(&root_for_callback);
+            on_change(notes);
         }
+        Err(e) => eprintln!("Watcher error: {}", e),
     })
     .map_err(|e| WatchError::Notify(e.to_string()))?;
 

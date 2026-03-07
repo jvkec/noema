@@ -1,7 +1,7 @@
 //! Ollama client for embeddings and completion. Wraps ollama-rs with a simple API.
 
-use ollama_rs::generation::embeddings::request::{EmbeddingsInput, GenerateEmbeddingsRequest};
 use ollama_rs::generation::completion::request::GenerationRequest;
+use ollama_rs::generation::embeddings::request::{EmbeddingsInput, GenerateEmbeddingsRequest};
 use ollama_rs::Ollama;
 use thiserror::Error;
 
@@ -72,7 +72,11 @@ impl OllamaClient {
     /// Generate a completion from a prompt using the given model.
     pub async fn generate(&self, model: &str, prompt: &str) -> Result<String, OllamaError> {
         let req = GenerationRequest::new(model.to_string(), prompt.to_string());
-        let res = self.inner.generate(req).await.map_err(OllamaError::Request)?;
+        let res = self
+            .inner
+            .generate(req)
+            .await
+            .map_err(OllamaError::Request)?;
         Ok(res.response)
     }
 }

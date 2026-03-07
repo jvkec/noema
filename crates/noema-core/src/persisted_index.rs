@@ -114,7 +114,10 @@ pub async fn build_persisted_index(
     }
 
     let texts: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
-    let embeddings = client.embed_batch(&texts).await.map_err(BuildPersistedIndexError::from)?;
+    let embeddings = client
+        .embed_batch(&texts)
+        .await
+        .map_err(BuildPersistedIndexError::from)?;
     store.add_batch(chunks, embeddings);
 
     Ok(PersistedIndex {
@@ -181,7 +184,10 @@ pub async fn update_persisted_index(
 
         if !chunks.is_empty() {
             let texts: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
-            let embeddings = client.embed_batch(&texts).await.map_err(UpdatePersistedIndexError::from)?;
+            let embeddings = client
+                .embed_batch(&texts)
+                .await
+                .map_err(UpdatePersistedIndexError::from)?;
             added_chunks = chunks.len();
             index.store.add_batch(chunks, embeddings);
         }
@@ -250,4 +256,3 @@ pub enum UpdatePersistedIndexError {
     #[error("embedding error: {0}")]
     Ollama(#[from] OllamaError),
 }
-

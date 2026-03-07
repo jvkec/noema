@@ -7,6 +7,7 @@ pub mod app_data;
 pub mod chunks;
 pub mod config;
 pub mod index;
+pub mod memory;
 pub mod notes;
 pub mod ollama;
 pub mod persisted_index;
@@ -20,8 +21,14 @@ pub use config::{
     ConfigError, ModelConfig,
 };
 pub use index::{build_index, IndexError};
+pub use memory::{
+    build_memory_overview, extract_note_signals, LifeArea, MemoryCard, MemoryOverview,
+    MemoryWeights, NoteMemorySignals,
+};
 pub use notes::{scan_notes, Note, ScanError};
-pub use ollama::{OllamaClient, OllamaError, DEFAULT_BASE_URL, DEFAULT_CHAT_MODEL, DEFAULT_EMBED_MODEL};
+pub use ollama::{
+    OllamaClient, OllamaError, DEFAULT_BASE_URL, DEFAULT_CHAT_MODEL, DEFAULT_EMBED_MODEL,
+};
 pub use persisted_index::{
     build_persisted_index, default_index_path, update_persisted_index, BuildPersistedIndexError,
     IndexSettings, NoteState, PersistedIndex, PersistedIndexError, UpdatePersistedIndexError,

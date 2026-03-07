@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use noema_core::{
-    default_index_path, get_notes_root as core_get_notes_root, load_config, scan_notes, OllamaClient,
-    PersistedIndex, DEFAULT_BASE_URL, DEFAULT_CHAT_MODEL, DEFAULT_EMBED_MODEL, INDEX_SCHEMA_VERSION,
+    build_memory_overview, default_index_path, get_notes_root as core_get_notes_root, load_config,
+    scan_notes, MemoryOverview, OllamaClient, PersistedIndex, DEFAULT_BASE_URL, DEFAULT_CHAT_MODEL,
+    DEFAULT_EMBED_MODEL, INDEX_SCHEMA_VERSION,
 };
 use serde::Serialize;
 
@@ -191,8 +192,8 @@ fn read_note(path: String) -> Result<NoteDetail, String> {
     if !abs.starts_with(&root) {
         return Err("Path is outside notes root".to_string());
     }
-    let raw = fs::read_to_string(&abs)
-        .map_err(|e| format!("Failed to read {}: {}", abs.display(), e))?;
+    let raw =
+        fs::read_to_string(&abs).map_err(|e| format!("Failed to read {}: {}", abs.display(), e))?;
     let (title, body) = split_note_content(&raw);
     Ok(NoteDetail {
         path: make_relative(&root, &abs),
@@ -219,8 +220,7 @@ fn save_note(path: String, title: String, body: String) -> Result<(), String> {
             .ok_or_else(|| "Invalid note path (no parent)".to_string())?,
     )
     .map_err(|e| format!("Failed to create parent directory: {}", e))?;
-    fs::write(&abs, content)
-        .map_err(|e| format!("Failed to write {}: {}", abs.display(), e))?;
+    fs::write(&abs, content).map_err(|e| format!("Failed to write {}: {}", abs.display(), e))?;
     Ok(())
 }
 
@@ -275,10 +275,21 @@ fn delete_note(path: String) -> Result<(), String> {
         return Err("Path is outside notes root".to_string());
     }
     if abs.is_file() {
-        fs::remove_file(&abs)
-            .map_err(|e| format!("Failed to delete {}: {}", abs.display(), e))?;
+        fs::remove_file(&abs).map_err(|e| format!("Failed to delete {}: {}", abs.display(), e))?;
     }
     Ok(())
+}
+
+#[tauri::command]
+fn memory_overview(limit: Option<usize>) -> Result<MemoryOverview, String> {
+    let root = notes_root()?;
+    let notes = scan_notes(&root).map_err(|e| e.to_string())?;
+    let mut overview = build_memory_overview(&notes, limit.unwrap_or(8));
+    for card in &mut overview.cards {
+        let p = Path::new(&card.note_path);
+        card.note_path = make_relative(&root, p);
+    }
+    Ok(overview)
 }
 
 #[tauri::command]
@@ -288,9 +299,7 @@ async fn query(query: String, k: Option<usize>) -> Result<Vec<QueryResult>, Stri
         .map_err(|e| format!("Failed to load index: {}. Run `noema init` first.", e))?;
 
     if idx.schema_version != INDEX_SCHEMA_VERSION {
-        return Err(format!(
-            "Index schema mismatch. Rebuild with `noema init`."
-        ));
+        return Err(format!("Index schema mismatch. Rebuild with `noema init`."));
     }
 
     if idx.store.is_empty() {
@@ -298,11 +307,7 @@ async fn query(query: String, k: Option<usize>) -> Result<Vec<QueryResult>, Stri
     }
 
     let cfg = load_config();
-    let url = cfg
-        .models
-        .embed_url
-        .as_deref()
-        .unwrap_or(DEFAULT_BASE_URL);
+    let url = cfg.models.embed_url.as_deref().unwrap_or(DEFAULT_BASE_URL);
     let model = cfg
         .models
         .embed_model
@@ -339,14 +344,14 @@ async fn query(query: String, k: Option<usize>) -> Result<Vec<QueryResult>, Stri
 }
 
 #[tauri::command]
-async fn ask(question: String, k: Option<usize>, model: Option<String>) -> Result<AskResponse, String> {
+async fn ask(
+    question: String,
+    k: Option<usize>,
+    model: Option<String>,
+) -> Result<AskResponse, String> {
     let index_path = default_index_path().ok_or("Could not determine index path")?;
-    let idx = PersistedIndex::load_from_file(&index_path).map_err(|e| {
-        format!(
-            "Failed to load index: {}. Run `noema init` first.",
-            e
-        )
-    })?;
+    let idx = PersistedIndex::load_from_file(&index_path)
+        .map_err(|e| format!("Failed to load index: {}. Run `noema init` first.", e))?;
 
     if idx.schema_version != INDEX_SCHEMA_VERSION {
         return Err("Index schema mismatch. Rebuild with `noema init`.".to_string());
@@ -456,9 +461,7 @@ async fn ask(question: String, k: Option<usize>, model: Option<String>) -> Resul
         .into_iter()
         .map(|(chunk, score)| {
             let note_key = chunk.note_path.display().to_string();
-            let title = note_meta
-                .get(&note_key)
-                .and_then(|m| m.title.clone());
+            let title = note_meta.get(&note_key).and_then(|m| m.title.clone());
             AskSource {
                 note_path: note_key,
                 title,
@@ -487,6 +490,7 @@ pub fn run() {
             save_note,
             create_note,
             delete_note,
+            memory_overview,
             query,
             ask,
             list_chat_models

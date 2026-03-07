@@ -114,7 +114,9 @@ pub enum ConfigError {
     Canonicalize(std::io::Error),
     #[error("not a directory: {0}")]
     NotADirectory(PathBuf),
-    #[error("unknown config key: {0}. Use: embed_url, embed_model, chat_url, chat_model, default_k")]
+    #[error(
+        "unknown config key: {0}. Use: embed_url, embed_model, chat_url, chat_model, default_k"
+    )]
     UnknownConfigKey(String),
     #[error("invalid default_k: must be a positive integer")]
     InvalidDefaultK,

@@ -43,7 +43,10 @@ pub fn chunk_note(note: &Note, max_chars: usize) -> Vec<Chunk> {
 
 /// Chunk all notes. Returns chunks from all notes in order.
 pub fn chunk_notes(notes: &[Note], max_chars: usize) -> Vec<Chunk> {
-    notes.iter().flat_map(|n| chunk_note(n, max_chars)).collect()
+    notes
+        .iter()
+        .flat_map(|n| chunk_note(n, max_chars))
+        .collect()
 }
 
 /// Splits text into chunks of at most max_chars, preferring markdown-aware section,
