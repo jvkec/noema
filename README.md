@@ -1,6 +1,6 @@
 # Noema
 
-Local-first life repo for searching and chatting with your notes. **v0**.
+A local-first life repo for searching and chatting with your notes. **v0**.
 
 ![Noema screenshot](./public/screenshot.png)
 
