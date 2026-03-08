@@ -2,7 +2,7 @@
 name = "noema-core"
 version = "0.1.0"
 edition = "2021"
-description = "Core logic: indexing, embeddings, LLM (Ollama). No UI—used by CLI or Tauri later."
+description = "Core logic for Noema desktop: indexing, embeddings, and LLM (Ollama)."
 
 [dependencies]
 directories = "5"

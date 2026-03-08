@@ -10,10 +10,25 @@ use crate::notes::Note;
 /// Default maximum characters per chunk. Keeps chunks small enough for embedding models.
 pub const DEFAULT_MAX_CHARS: usize = 512;
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ChunkKind {
+    Title,
+    Body,
+}
+
+impl Default for ChunkKind {
+    fn default() -> Self {
+        Self::Body
+    }
+}
+
 /// A chunk of text from a note, with source reference.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Chunk {
     pub text: String,
+    #[serde(default)]
+    pub kind: ChunkKind,
     pub note_path: PathBuf,
     /// Index of this chunk within the note (0, 1, 2, …).
     pub index: usize,
@@ -21,20 +36,40 @@ pub struct Chunk {
 
 /// Chunk a single note's body into smaller pieces.
 pub fn chunk_note(note: &Note, max_chars: usize) -> Vec<Chunk> {
-    let body = note.body.trim();
-    if body.is_empty() {
+    let (title, body) = split_title_and_body(note);
+    if title.is_none() && body.is_empty() {
         return Vec::new();
     }
-    let raw_chunks = split_into_chunks(body, max_chars);
-    let overlapped = apply_overlap(raw_chunks, max_chars);
     let mut chunks = Vec::new();
+    let mut next_index = 0usize;
+
+    if let Some(title_text) = title {
+        let t = title_text.trim().to_string();
+        if !t.is_empty() {
+            chunks.push(Chunk {
+                text: t,
+                kind: ChunkKind::Title,
+                note_path: note.path.clone(),
+                index: next_index,
+            });
+            next_index += 1;
+        }
+    }
+
+    if body.is_empty() {
+        return chunks;
+    }
+
+    let raw_chunks = split_into_chunks(&body, max_chars);
+    let overlapped = apply_overlap(raw_chunks, max_chars);
     for (i, text) in overlapped.into_iter().enumerate() {
         let t = text.trim().to_string();
         if !t.is_empty() {
             chunks.push(Chunk {
                 text: t,
+                kind: ChunkKind::Body,
                 note_path: note.path.clone(),
-                index: i,
+                index: next_index + i,
             });
         }
     }
@@ -121,6 +156,60 @@ fn split_long_text(text: &str, max_chars: usize) -> Vec<String> {
     result
 }
 
+fn split_title_and_body(note: &Note) -> (Option<String>, String) {
+    if let Some(fm) = note.frontmatter.as_ref() {
+        if let Some(title) = fm.title.as_ref() {
+            let t = title.trim();
+            if !t.is_empty() {
+                return (Some(t.to_string()), note.body.trim().to_string());
+            }
+        }
+    }
+
+    let body = note.body.trim();
+    if body.is_empty() {
+        return (None, String::new());
+    }
+
+    let lines: Vec<&str> = note.body.lines().collect();
+    let Some(first_idx) = lines.iter().position(|line| !line.trim().is_empty()) else {
+        return (None, String::new());
+    };
+
+    let first_line = lines[first_idx].trim();
+    let heading_title = first_line
+        .strip_prefix('#')
+        .map(|rest| rest.trim_start_matches('#').trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    if let Some(title) = heading_title {
+        let rest = if first_idx + 1 < lines.len() {
+            lines[first_idx + 1..].join("\n").trim().to_string()
+        } else {
+            String::new()
+        };
+        return (Some(title), rest);
+    }
+
+    // Editor-authored note format is "title + blank line + body".
+    let mut idx = first_idx + 1;
+    let mut saw_blank = false;
+    while idx < lines.len() && lines[idx].trim().is_empty() {
+        saw_blank = true;
+        idx += 1;
+    }
+    if saw_blank {
+        let rest = if idx < lines.len() {
+            lines[idx..].join("\n").trim().to_string()
+        } else {
+            String::new()
+        };
+        return (Some(first_line.to_string()), rest);
+    }
+
+    (None, body.to_string())
+}
+
 /// Prefer split at \n; else at last space before max_chars; else hard cut.
 fn try_split_at_boundary(text: &str, max_chars: usize) -> (String, &str) {
     let segment = &text[..text.len().min(max_chars + 1)];
@@ -197,6 +286,7 @@ mod tests {
         let c = chunk_note(&n, 512);
         assert_eq!(c.len(), 1);
         assert_eq!(c[0].text, "One paragraph.");
+        assert_eq!(c[0].kind, ChunkKind::Body);
     }
 
     #[test]
@@ -213,5 +303,24 @@ mod tests {
         let c = chunk_note(&n, 200);
         assert!(c.len() >= 3);
         assert!(c.iter().all(|ch| ch.text.len() <= 200));
+    }
+
+    #[test]
+    fn chunk_editor_title_as_separate_chunk() {
+        let n = note("My Title\n\nBody line one.\nBody line two.");
+        let c = chunk_note(&n, 512);
+        assert!(c.len() >= 2);
+        assert_eq!(c[0].text, "My Title");
+        assert_eq!(c[0].kind, ChunkKind::Title);
+        assert_eq!(c[1].kind, ChunkKind::Body);
+    }
+
+    #[test]
+    fn chunk_markdown_heading_as_title_chunk() {
+        let n = note("# Heading One\nBody.");
+        let c = chunk_note(&n, 512);
+        assert!(c.len() >= 2);
+        assert_eq!(c[0].text, "Heading One");
+        assert_eq!(c[0].kind, ChunkKind::Title);
     }
 }

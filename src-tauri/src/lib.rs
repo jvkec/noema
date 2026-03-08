@@ -5,9 +5,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use noema_core::{
-    build_memory_overview, default_index_path, get_notes_root as core_get_notes_root, load_config,
-    scan_notes, MemoryOverview, OllamaClient, PersistedIndex, DEFAULT_BASE_URL, DEFAULT_CHAT_MODEL,
-    DEFAULT_EMBED_MODEL, INDEX_SCHEMA_VERSION,
+    build_memory_overview, build_persisted_index, default_index_path,
+    get_notes_root as core_get_notes_root, load_config, scan_notes, set_notes_root as core_set_notes_root,
+    ChunkKind, IndexSettings, MemoryOverview, OllamaClient, PersistedIndex, DEFAULT_BASE_URL, DEFAULT_CHAT_MODEL,
+    DEFAULT_EMBED_MODEL, DEFAULT_MAX_CHARS, INDEX_SCHEMA_VERSION,
 };
 use serde::Serialize;
 
@@ -20,7 +21,7 @@ fn notes_root() -> Result<PathBuf, String> {
                 Err(format!("Notes root is not a directory: {}", p.display()))
             }
         }
-        None => Err("No notes root configured. Run `noema set-root <PATH>`.".to_string()),
+        None => Err("No notes root configured in the desktop app.".to_string()),
     }
 }
 
@@ -186,26 +187,55 @@ fn get_notes_root() -> Option<String> {
 }
 
 #[tauri::command]
+fn set_notes_root(path: String) -> Result<String, String> {
+    let p = PathBuf::from(path.trim());
+    if !p.is_dir() {
+        return Err(format!("Not a directory: {}", p.display()));
+    }
+    core_set_notes_root(&p).map_err(|e| format!("Failed to save notes root: {}", e))?;
+    Ok(p.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
 fn status() -> String {
     noema_core::status().to_string()
 }
 
 #[tauri::command]
-fn rebuild_index() -> Result<String, String> {
-    let output = Command::new("noema")
-        .arg("init")
-        .output()
-        .map_err(|e| format!("Failed to run `noema init`: {}", e))?;
+async fn rebuild_index() -> Result<String, String> {
+    let root = notes_root()?;
+    let notes = scan_notes(&root).map_err(|e| format!("Failed to scan notes: {}", e))?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        if stderr.is_empty() {
-            return Err(format!("`noema init` failed with status {}", output.status));
-        }
-        return Err(format!("`noema init` failed: {}", stderr));
-    }
+    let cfg = load_config();
+    let url = cfg
+        .models
+        .embed_url
+        .clone()
+        .unwrap_or_else(|| DEFAULT_BASE_URL.to_string());
+    let model = cfg
+        .models
+        .embed_model
+        .clone()
+        .unwrap_or_else(|| DEFAULT_EMBED_MODEL.to_string());
+    let client = OllamaClient::from_url(&url)
+        .map_err(|e| e.to_string())?
+        .with_embed_model(&model);
+    let settings = IndexSettings {
+        notes_root: root.to_string_lossy().into_owned(),
+        max_chars: DEFAULT_MAX_CHARS,
+        ollama_url: url,
+        embed_model: model,
+    };
 
-    Ok("index rebuilt".to_string())
+    let idx = build_persisted_index(notes, &client, settings)
+        .await
+        .map_err(|e| format!("Failed to build index: {}", e))?;
+    let chunk_count = idx.store.len();
+    let index_path = default_index_path().ok_or("Could not determine index path")?;
+    idx.save_to_file(&index_path)
+        .map_err(|e| format!("Failed to save index: {}", e))?;
+
+    Ok(format!("index rebuilt ({} chunks)", chunk_count))
 }
 
 #[tauri::command]
@@ -368,14 +398,14 @@ fn memory_overview(limit: Option<usize>) -> Result<MemoryOverview, String> {
 async fn query(query: String, k: Option<usize>) -> Result<Vec<QueryResult>, String> {
     let index_path = default_index_path().ok_or("Could not determine index path")?;
     let idx = PersistedIndex::load_from_file(&index_path)
-        .map_err(|e| format!("Failed to load index: {}. Run `noema init` first.", e))?;
+        .map_err(|e| format!("Failed to load index: {}. Rebuild the index in the app.", e))?;
 
     if idx.schema_version != INDEX_SCHEMA_VERSION {
-        return Err(format!("Index schema mismatch. Rebuild with `noema init`."));
+        return Err("Index schema mismatch. Rebuild the index in the app.".to_string());
     }
 
     if idx.store.is_empty() {
-        return Err("Index is empty. Run `noema init` to build it.".to_string());
+        return Err("Index is empty. Rebuild the index in the app.".to_string());
     }
 
     let cfg = load_config();
@@ -439,14 +469,14 @@ async fn ask(
 ) -> Result<AskResponse, String> {
     let index_path = default_index_path().ok_or("Could not determine index path")?;
     let idx = PersistedIndex::load_from_file(&index_path)
-        .map_err(|e| format!("Failed to load index: {}. Run `noema init` first.", e))?;
+        .map_err(|e| format!("Failed to load index: {}. Rebuild the index in the app.", e))?;
 
     if idx.schema_version != INDEX_SCHEMA_VERSION {
-        return Err("Index schema mismatch. Rebuild with `noema init`.".to_string());
+        return Err("Index schema mismatch. Rebuild the index in the app.".to_string());
     }
 
     if idx.store.is_empty() {
-        return Err("Index is empty. Run `noema init` to build it.".to_string());
+        return Err("Index is empty. Rebuild the index in the app.".to_string());
     }
 
     // Determine effective top-k, honoring optional config default.
@@ -459,7 +489,7 @@ async fn ask(
     }
 
     // Build a minimal metadata map from current notes on disk for titles.
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     #[derive(Clone)]
     struct NoteMeta {
         title: Option<String>,
@@ -499,20 +529,35 @@ async fn ask(
     let index_notes_root = Path::new(&idx.settings.notes_root);
     let current_root = notes_root().ok();
     let preferred_root = current_root.as_deref().unwrap_or(index_notes_root);
-    let raw_search = idx.store.search(&q_emb, effective_k.saturating_mul(3));
+    let raw_search = idx.store.search(&q_emb, effective_k.saturating_mul(6));
     let filtered: Vec<_> = raw_search
         .iter()
         .cloned()
         .filter(|(chunk, _)| {
             chunk_note_exists(&chunk.note_path, index_notes_root, current_root.as_deref())
         })
-        .take(effective_k)
         .collect();
-    let raw_results: Vec<_> = if filtered.is_empty() {
-        raw_search.into_iter().take(effective_k).collect()
+    let ranked = if filtered.is_empty() {
+        raw_search
     } else {
         filtered
     };
+    let (body_results, title_results): (Vec<_>, Vec<_>) = ranked
+        .into_iter()
+        .partition(|(chunk, _)| chunk.kind == ChunkKind::Body);
+    let mut seen_notes: HashSet<String> = HashSet::new();
+    let mut raw_results: Vec<_> = Vec::with_capacity(effective_k);
+    for (chunk, score) in body_results.into_iter().chain(title_results.into_iter()) {
+        let note_key = resolve_existing_note_path(&chunk.note_path, index_notes_root, current_root.as_deref())
+            .map(|p| make_relative(preferred_root, &p))
+            .unwrap_or_else(|| chunk.note_path.display().to_string());
+        if seen_notes.insert(note_key) {
+            raw_results.push((chunk, score));
+            if raw_results.len() >= effective_k {
+                break;
+            }
+        }
+    }
     if raw_results.is_empty() {
         return Err("No results.".to_string());
     }
@@ -521,22 +566,15 @@ async fn ask(
     let mut context = String::new();
     use std::fmt::Write as FmtWrite;
     for (i, (chunk, score)) in raw_results.iter().enumerate() {
-        let resolved = resolve_existing_note_path(&chunk.note_path, index_notes_root, current_root.as_deref());
-        let normalized = resolved
-            .as_ref()
-            .map(|p| make_relative(preferred_root, p))
-            .unwrap_or_else(|| chunk.note_path.display().to_string());
-        let title = note_meta
-            .get(&normalized)
-            .or_else(|| note_meta.get(&chunk.note_path.display().to_string()))
-            .and_then(|m| m.title.as_deref())
-            .unwrap_or_else(|| normalized.as_str());
         let _ = FmtWrite::write_fmt(
             &mut context,
             format_args!(
-                "[{}] {} (score {:.3})\n{}\n\n",
+                "[{}][{}] (score {:.3})\n{}\n\n",
                 i + 1,
-                title,
+                match chunk.kind {
+                    ChunkKind::Title => "title",
+                    ChunkKind::Body => "body",
+                },
                 score,
                 chunk.text
             ),
@@ -562,7 +600,7 @@ async fn ask(
     let chat_client = OllamaClient::from_url(&chat_url).map_err(|e| e.to_string())?;
 
     let prompt = format!(
-        "You are Noema, a local-first knowledge assistant. Use ONLY the following note excerpts as context. If the context is insufficient, say you don't know.\n\nContext:\n{}\nQuestion:\n{}\n\nAnswer in a concise paragraph or two:\n",
+        "You are Noema, a local-first knowledge assistant.\nUse ONLY the following numbered excerpts as context.\nEach excerpt is tagged as [title] or [body]. Treat title excerpts as metadata and prefer body excerpts for factual grounding.\nIf context is insufficient, say you don't know.\nCite supporting excerpts inline as [1], [2], etc.\nDo not mention note file names or paths unless the user explicitly asks for them.\n\nContext:\n{}\nQuestion:\n{}\n\nAnswer in a concise paragraph or two with citation markers:\n",
         context, question
     );
 
@@ -607,6 +645,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             get_notes_root,
+            set_notes_root,
             status,
             rebuild_index,
             list_notes,

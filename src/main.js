@@ -111,8 +111,10 @@ function renderLifeLenses() {
     counts[lens] = (counts[lens] || 0) + 1;
   });
   lensListEl.innerHTML = LIFE_LENSES.map((l) => {
-    const isActive = l.id === activeLens ? " active" : "";
-    return `<button type="button" class="lens-btn${isActive}" data-lens="${l.id}">
+    const isActive = l.id === activeLens;
+    return `<button type="button" class="lens-btn${
+      isActive ? " active" : ""
+    }" data-lens="${l.id}" aria-pressed="${isActive ? "true" : "false"}">
       <span>${escapeHtml(l.label)}</span>
       <span class="lens-count">${counts[l.id] || 0}</span>
     </button>`;
@@ -185,11 +187,22 @@ async function initStatus() {
     const root = await invoke("get_notes_root");
     if (root) {
       setStatus(`notes: ${root}`);
+      return true;
     } else {
-      setStatus("no notes root. run: noema set-root <path>");
+      const entered = window.prompt(
+        "Enter the full path to your notes folder to get started:"
+      );
+      if (entered && entered.trim()) {
+        const savedRoot = await invoke("set_notes_root", { path: entered.trim() });
+        setStatus(`notes: ${savedRoot}`);
+        return true;
+      }
+      setStatus("no notes root configured.");
+      return false;
     }
   } catch (e) {
     setStatus(String(e), true);
+    return false;
   }
 }
 
@@ -502,6 +515,7 @@ function escapeHtml(s) {
 
 function renderSearchResults(results, query) {
   if (!searchResultsEl) return;
+  searchResultsEl.setAttribute("aria-hidden", "false");
   if (!results || results.length === 0) {
     searchResultsEl.innerHTML = `<div class="muted">no matches for "${escapeHtml(query)}"</div>`;
     searchResultsEl.classList.remove("hidden");
@@ -540,15 +554,19 @@ function bindSearchEvents() {
       if (searchResultsEl) {
         const msg =
           indexErrorMessage ||
-          "index not ready. run `noema init` in the CLI, then restart the app.";
+          "index not ready. rebuild index in the app.";
         searchResultsEl.innerHTML = `<div class="muted">${escapeHtml(msg)}</div>`;
         searchResultsEl.classList.remove("hidden");
+        searchResultsEl.setAttribute("aria-hidden", "false");
       }
       return;
     }
     if (searchTimer) clearTimeout(searchTimer);
     if (!q) {
-      if (searchResultsEl) searchResultsEl.classList.add("hidden");
+      if (searchResultsEl) {
+        searchResultsEl.classList.add("hidden");
+        searchResultsEl.setAttribute("aria-hidden", "true");
+      }
       return;
     }
     searchTimer = setTimeout(async () => {
@@ -558,17 +576,18 @@ function bindSearchEvents() {
       } catch (e) {
         const msg = String(e);
         if (
-          msg.includes("Run `noema init` first") ||
+          msg.includes("Rebuild the index in the app") ||
           msg.includes("Could not determine index path") ||
           msg.includes("Index is empty")
         ) {
           indexUsable = false;
-          indexErrorMessage = "index not built. run `noema init` in the CLI, then restart the app.";
+          indexErrorMessage = "index not built. rebuild index in the app.";
         }
         if (searchResultsEl) {
           const display = indexErrorMessage || msg;
           searchResultsEl.innerHTML = `<div class="error">${escapeHtml(display)}</div>`;
           searchResultsEl.classList.remove("hidden");
+          searchResultsEl.setAttribute("aria-hidden", "false");
         }
       }
     }, 200);
@@ -577,7 +596,10 @@ function bindSearchEvents() {
   searchInputEl.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       searchInputEl.value = "";
-      if (searchResultsEl) searchResultsEl.classList.add("hidden");
+      if (searchResultsEl) {
+        searchResultsEl.classList.add("hidden");
+        searchResultsEl.setAttribute("aria-hidden", "true");
+      }
       searchInputEl.blur();
     }
   });
@@ -590,7 +612,10 @@ function bindSearchEvents() {
       if (item) {
         const path = item.dataset.path;
         if (path) {
-          if (searchResultsEl) searchResultsEl.classList.add("hidden");
+          if (searchResultsEl) {
+            searchResultsEl.classList.add("hidden");
+            searchResultsEl.setAttribute("aria-hidden", "true");
+          }
           searchInputEl.value = "";
           await openNote(decodeURIComponent(path));
         }
@@ -730,7 +755,7 @@ function bindRebuildIndexButton() {
     } catch (e) {
       const msg = String(e);
       setStatus(msg, true);
-      if (msg.includes("noema init")) {
+      if (msg.toLowerCase().includes("index")) {
         indexUsable = false;
         indexErrorMessage = msg;
       }
@@ -764,7 +789,7 @@ function bindChat() {
       if (!indexUsable) {
         appendChatMessage(
           "agent",
-          "index not built. run `noema init` in the CLI, then restart the app."
+          "index not built. rebuild index in the app."
         );
         return;
       }
@@ -781,7 +806,7 @@ function bindChat() {
         if (!resp || !resp.answer) {
           appendChatMessage(
             "agent",
-            "no answer. check that `noema init` has been run and Ollama is running."
+            "no answer. check that index has been rebuilt and Ollama is running."
           );
           return;
         }
@@ -790,13 +815,13 @@ function bindChat() {
         pending?.remove();
         const msg = String(err);
         if (
-          msg.includes("Run `noema init` first") ||
+          msg.includes("Rebuild the index in the app") ||
           msg.includes("Index is empty") ||
           msg.includes("Could not determine index path")
         ) {
           indexUsable = false;
           indexErrorMessage =
-            "index not built. run `noema init` in the CLI, then restart the app.";
+            "index not built. rebuild index in the app.";
           appendChatMessage("agent", indexErrorMessage);
         } else {
           appendChatMessage("agent", msg);
@@ -838,7 +863,10 @@ function appendChatAnswer(answer, sources) {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "chat-source-link";
-      btn.textContent = s.title || s.note_path || `source ${idx + 1}`;
+      const sourceLabel = s.title || s.note_path || `source ${idx + 1}`;
+      btn.textContent = `[${idx + 1}]`;
+      btn.title = sourceLabel;
+      btn.setAttribute("aria-label", `Open source ${idx + 1}: ${sourceLabel}`);
       btn.addEventListener("click", () => {
         if (s.note_path) {
           openNote(s.note_path);
@@ -884,7 +912,7 @@ async function initChatModels() {
 }
 
 async function bootstrap() {
-  await initStatus();
+  const ready = await initStatus();
   bindNoteTreeEvents();
   bindEditorEvents();
   bindSearchEvents();
@@ -897,7 +925,15 @@ async function bootstrap() {
   bindModeButtons();
   await initChatModels();
   bindChat();
-  await loadNotes();
+  if (ready) {
+    await loadNotes();
+  } else {
+    clearEditor();
+    renderLifeLenses();
+    renderMemoryCues();
+    renderNoteTree();
+    updateWorkflowMetrics();
+  }
   setMode(activeMode);
 
   // Global shortcuts (macOS-first): cmd+n, cmd+k, cmd+j

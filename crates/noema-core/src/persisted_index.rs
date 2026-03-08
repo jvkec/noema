@@ -1,7 +1,7 @@
 //! Persisted on-disk index format (metadata + vector store).
 //!
 //! This is the format written to `index.json` in the app data directory. Keeping this in
-//! `noema-core` ensures the CLI and future UI share a stable, versioned representation.
+//! `noema-core` ensures the desktop app uses a stable, versioned representation.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;

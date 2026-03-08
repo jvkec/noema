@@ -442,6 +442,9 @@ body.mode-synthesize .sidebar {
   margin: 0;
   padding: 0.55rem 0.75rem;
   text-wrap: balance;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .note-body {
@@ -455,6 +458,11 @@ body.mode-synthesize .sidebar {
   line-height: 1.45;
   padding: 0.7rem 0.75rem;
   text-wrap: pretty;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .search-results {
@@ -624,6 +632,29 @@ body.mode-synthesize .sidebar {
   cursor: pointer;
 }
 
+#new-note-btn,
+#rebuild-index-btn,
+.mode-btn,
+.lens-btn,
+.tree-folder,
+.tree-note-open,
+.tree-note-delete,
+.memory-item,
+.ritual-btn,
+.search-result-item,
+.delete-dialog-actions button {
+  min-height: 34px;
+}
+
+.tree-note-delete {
+  min-width: 34px;
+}
+
+.chat-source-link {
+  min-height: 24px;
+  padding: 0.05rem 0.2rem;
+}
+
 #delete-confirm-btn {
   border-color: var(--danger);
   color: var(--danger);
@@ -660,13 +691,21 @@ body.mode-synthesize .sidebar {
 
 @media (pointer: coarse) {
   #new-note-btn,
+  #rebuild-index-btn,
+  .mode-btn,
   .lens-btn,
   .tree-folder,
   .tree-note-open,
   .tree-note-delete,
   .memory-item,
   .ritual-btn,
-  .search-result-item {
+  .search-result-item,
+  .chat-source-link,
+  .delete-dialog-actions button {
     min-height: 44px;
+  }
+
+  .tree-note-delete {
+    min-width: 44px;
   }
 }

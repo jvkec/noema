@@ -1,4 +1,4 @@
-//! All backend logic independent of how the app is run (CLI or Tauri).
+//! All backend logic for the Noema desktop app.
 //!
 //! User notes live in a folder they choose. Noema stores only config and index
 //! in its own app data directory (see [app_data]).
@@ -15,7 +15,7 @@ pub mod store;
 pub mod watcher;
 
 pub use app_data::app_data_dir;
-pub use chunks::{chunk_note, chunk_notes, Chunk, DEFAULT_MAX_CHARS};
+pub use chunks::{chunk_note, chunk_notes, Chunk, ChunkKind, DEFAULT_MAX_CHARS};
 pub use config::{
     get_notes_root, load_config, set_model_config, set_notes_root, unset_model_config, Config,
     ConfigError, ModelConfig,
