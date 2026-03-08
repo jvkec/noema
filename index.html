@@ -29,7 +29,39 @@
 
       <div class="status-bar">
         <span id="status" class="muted" aria-live="polite">checking…</span>
-        <span id="save-status" class="muted" aria-live="polite"></span>
+        <div class="status-actions">
+          <span id="save-status" class="muted" aria-live="polite"></span>
+          <button type="button" id="rebuild-index-btn">rebuild index</button>
+        </div>
+      </div>
+
+      <section class="workflow-strip">
+        <div class="workflow-label">workspace mode</div>
+        <div class="workflow-actions" role="group" aria-label="Workspace mode">
+          <button type="button" id="mode-review-btn" class="mode-btn active" aria-pressed="true">
+            1. review
+          </button>
+          <button type="button" id="mode-capture-btn" class="mode-btn" aria-pressed="false">
+            2. capture
+          </button>
+          <button type="button" id="mode-synthesize-btn" class="mode-btn" aria-pressed="false">
+            3. synthesize
+          </button>
+        </div>
+        <div class="workflow-metrics">
+          <span class="metric-item">
+            queue <span id="metric-queue" class="metric-value">0</span>
+          </span>
+          <span class="metric-item">
+            loops <span id="metric-loops" class="metric-value">0</span>
+          </span>
+          <span class="metric-item">
+            focus <span id="metric-focus" class="metric-value">none</span>
+          </span>
+        </div>
+      </section>
+      <div id="mode-hint" class="mode-hint muted">
+        Review surfaced notes and pick one to continue.
       </div>
 
       <main class="app-main">
@@ -43,11 +75,11 @@
 
         <section class="editor">
           <section id="life-cues" class="life-cues">
-            <div class="cue-column">
+            <div id="memory-cue-column" class="cue-column">
               <div class="cue-title">memory cues</div>
               <div id="memory-list" class="memory-list"></div>
             </div>
-            <div class="cue-column">
+            <div id="ritual-cue-column" class="cue-column">
               <div class="cue-title">capture rituals</div>
               <div id="capture-rituals" class="capture-rituals">
                 <button type="button" class="ritual-btn" data-template="reflection">

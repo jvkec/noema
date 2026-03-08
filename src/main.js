@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 const statusEl = document.getElementById("status");
 const saveStatusEl = document.getElementById("save-status");
+const rebuildIndexBtn = document.getElementById("rebuild-index-btn");
 const noteTreeEl = document.getElementById("note-tree");
 const lensListEl = document.getElementById("lens-list");
 const lifeSummaryEl = document.getElementById("life-summary");
@@ -10,6 +11,13 @@ const noteBodyEl = document.getElementById("note-body");
 const searchInputEl = document.getElementById("search");
 const searchResultsEl = document.getElementById("search-results");
 const newNoteBtn = document.getElementById("new-note-btn");
+const modeReviewBtn = document.getElementById("mode-review-btn");
+const modeCaptureBtn = document.getElementById("mode-capture-btn");
+const modeSynthesizeBtn = document.getElementById("mode-synthesize-btn");
+const modeHintEl = document.getElementById("mode-hint");
+const metricQueueEl = document.getElementById("metric-queue");
+const metricLoopsEl = document.getElementById("metric-loops");
+const metricFocusEl = document.getElementById("metric-focus");
 const memoryListEl = document.getElementById("memory-list");
 const captureRitualsEl = document.getElementById("capture-rituals");
 const chatInputEl = document.getElementById("chat-input");
@@ -28,6 +36,7 @@ let expandedFolders = new Set();
 let indexUsable = true;
 let indexErrorMessage = null;
 let activeLens = "all";
+let activeMode = "review";
 let pendingDeletePath = null;
 let memoryCards = [];
 let memoryEngineMessage = null;
@@ -127,6 +136,48 @@ function setStatus(text, isError = false) {
 function setSaveStatus(text) {
   if (!saveStatusEl) return;
   saveStatusEl.textContent = text || "";
+}
+
+function setMode(mode) {
+  activeMode = mode;
+  document.body.classList.remove("mode-review", "mode-capture", "mode-synthesize");
+  document.body.classList.add(`mode-${mode}`);
+  if (modeReviewBtn) modeReviewBtn.classList.toggle("active", mode === "review");
+  if (modeCaptureBtn) modeCaptureBtn.classList.toggle("active", mode === "capture");
+  if (modeSynthesizeBtn) modeSynthesizeBtn.classList.toggle("active", mode === "synthesize");
+  if (modeReviewBtn) modeReviewBtn.setAttribute("aria-pressed", String(mode === "review"));
+  if (modeCaptureBtn) modeCaptureBtn.setAttribute("aria-pressed", String(mode === "capture"));
+  if (modeSynthesizeBtn) modeSynthesizeBtn.setAttribute("aria-pressed", String(mode === "synthesize"));
+  if (modeHintEl) {
+    if (mode === "review") {
+      modeHintEl.textContent =
+        "Review surfaced notes and keep your next move clear.";
+    } else if (mode === "capture") {
+      modeHintEl.textContent =
+        "Capture quickly: choose a ritual template, then write in the editor.";
+    } else {
+      modeHintEl.textContent =
+        "Synthesize: ask the assistant to connect notes and surface patterns.";
+    }
+  }
+  if (mode === "capture" && noteTitleEl) {
+    noteTitleEl.focus();
+  }
+  if (mode === "synthesize" && chatInputEl) {
+    chatInputEl.focus();
+  }
+}
+
+function updateWorkflowMetrics() {
+  if (metricQueueEl) metricQueueEl.textContent = String(memoryCards.length || 0);
+  if (metricLoopsEl) {
+    const loops = memoryCards.reduce((sum, card) => sum + (Number(card.open_loops) || 0), 0);
+    metricLoopsEl.textContent = String(loops);
+  }
+  if (metricFocusEl) {
+    const selected = notes.find((n) => n.path === currentPath);
+    metricFocusEl.textContent = selected ? selected.title || "untitled" : "none";
+  }
 }
 
 async function initStatus() {
@@ -280,6 +331,7 @@ async function loadNotes() {
     renderLifeLenses();
     renderMemoryCues();
     renderNoteTree();
+    updateWorkflowMetrics();
     if (!currentPath && notes.length > 0) {
       await openNote(notes[0].path);
     } else if (currentPath && notes.every((n) => n.path !== currentPath)) {
@@ -297,6 +349,7 @@ function clearEditor() {
   if (noteTitleEl) noteTitleEl.value = "";
   if (noteBodyEl) noteBodyEl.value = "";
   setSaveStatus("");
+  updateWorkflowMetrics();
 }
 
 async function openNote(path) {
@@ -311,6 +364,7 @@ async function openNote(path) {
     if (noteBodyEl) noteBodyEl.value = detail.body || "";
     setSaveStatus("");
     renderNoteTree();
+    updateWorkflowMetrics();
   } catch (e) {
     setStatus(String(e), true);
   }
@@ -378,6 +432,7 @@ function scheduleSave() {
       await refreshMemoryOverview();
       renderLifeLenses();
       renderMemoryCues();
+      updateWorkflowMetrics();
     } catch (e) {
       setSaveStatus("save failed");
       setStatus(String(e), true);
@@ -391,9 +446,11 @@ async function refreshMemoryOverview() {
     memoryCards =
       overview && Array.isArray(overview.cards) ? overview.cards : [];
     memoryEngineMessage = null;
+    updateWorkflowMetrics();
   } catch (e) {
     memoryCards = [];
     memoryEngineMessage = String(e);
+    updateWorkflowMetrics();
   }
 }
 
@@ -659,6 +716,42 @@ function bindNewNoteButton() {
   });
 }
 
+function bindRebuildIndexButton() {
+  if (!rebuildIndexBtn) return;
+  rebuildIndexBtn.addEventListener("click", async () => {
+    rebuildIndexBtn.disabled = true;
+    setStatus("rebuilding index... this may take a minute");
+    try {
+      const message = await invoke("rebuild_index");
+      indexUsable = true;
+      indexErrorMessage = null;
+      await loadNotes();
+      setStatus(typeof message === "string" && message ? message : "index rebuilt");
+    } catch (e) {
+      const msg = String(e);
+      setStatus(msg, true);
+      if (msg.includes("noema init")) {
+        indexUsable = false;
+        indexErrorMessage = msg;
+      }
+    } finally {
+      rebuildIndexBtn.disabled = false;
+    }
+  });
+}
+
+function bindModeButtons() {
+  if (modeReviewBtn) {
+    modeReviewBtn.addEventListener("click", () => setMode("review"));
+  }
+  if (modeCaptureBtn) {
+    modeCaptureBtn.addEventListener("click", () => setMode("capture"));
+  }
+  if (modeSynthesizeBtn) {
+    modeSynthesizeBtn.addEventListener("click", () => setMode("synthesize"));
+  }
+}
+
 function bindChat() {
   if (!chatInputEl || !chatThreadEl) return;
   chatInputEl.addEventListener("keydown", async (e) => {
@@ -800,9 +893,12 @@ async function bootstrap() {
   bindCaptureRituals();
   bindDeleteDialog();
   bindNewNoteButton();
+  bindRebuildIndexButton();
+  bindModeButtons();
   await initChatModels();
   bindChat();
   await loadNotes();
+  setMode(activeMode);
 
   // Global shortcuts (macOS-first): cmd+n, cmd+k, cmd+j
   window.addEventListener("keydown", (e) => {

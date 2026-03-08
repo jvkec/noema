@@ -31,6 +31,42 @@ fn make_relative(root: &Path, path: &Path) -> String {
     }
 }
 
+fn chunk_note_exists(note_path: &Path, index_root: &Path, current_root: Option<&Path>) -> bool {
+    if note_path.is_absolute() && note_path.is_file() {
+        return true;
+    }
+    if index_root.join(note_path).is_file() {
+        return true;
+    }
+    if let Some(root) = current_root {
+        if root.join(note_path).is_file() {
+            return true;
+        }
+    }
+    false
+}
+
+fn resolve_existing_note_path(
+    note_path: &Path,
+    index_root: &Path,
+    current_root: Option<&Path>,
+) -> Option<PathBuf> {
+    if note_path.is_absolute() && note_path.is_file() {
+        return Some(note_path.to_path_buf());
+    }
+    let from_index = index_root.join(note_path);
+    if from_index.is_file() {
+        return Some(from_index);
+    }
+    if let Some(root) = current_root {
+        let from_current = root.join(note_path);
+        if from_current.is_file() {
+            return Some(from_current);
+        }
+    }
+    None
+}
+
 fn split_note_content(raw: &str) -> (String, String) {
     // Very simple heuristic: first non-empty line is the title, rest is body.
     let mut lines: Vec<&str> = raw.lines().collect();
@@ -152,6 +188,24 @@ fn get_notes_root() -> Option<String> {
 #[tauri::command]
 fn status() -> String {
     noema_core::status().to_string()
+}
+
+#[tauri::command]
+fn rebuild_index() -> Result<String, String> {
+    let output = Command::new("noema")
+        .arg("init")
+        .output()
+        .map_err(|e| format!("Failed to run `noema init`: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if stderr.is_empty() {
+            return Err(format!("`noema init` failed with status {}", output.status));
+        }
+        return Err(format!("`noema init` failed: {}", stderr));
+    }
+
+    Ok("index rebuilt".to_string())
 }
 
 #[tauri::command]
@@ -277,6 +331,24 @@ fn delete_note(path: String) -> Result<(), String> {
     if abs.is_file() {
         fs::remove_file(&abs).map_err(|e| format!("Failed to delete {}: {}", abs.display(), e))?;
     }
+
+    // Keep persisted semantic memory in sync with file deletes.
+    if let Some(index_path) = default_index_path() {
+        if let Ok(mut idx) = PersistedIndex::load_from_file(&index_path) {
+            let rel = make_relative(&root, &abs);
+            idx.store.remove_note(&abs);
+            idx.store.remove_note(Path::new(&rel));
+            idx.note_states.remove(&abs.to_string_lossy().into_owned());
+            idx.note_states.remove(&rel);
+            idx.updated_at_unix =
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64;
+            let _ = idx.save_to_file(&index_path);
+        }
+    }
+
     Ok(())
 }
 
@@ -321,10 +393,26 @@ async fn query(query: String, k: Option<usize>) -> Result<Vec<QueryResult>, Stri
 
     let q_emb = client.embed(&query).await.map_err(|e| e.to_string())?;
     let raw = idx.store.search(&q_emb, k);
+    let index_notes_root = Path::new(&idx.settings.notes_root);
+    let current_root = notes_root().ok();
+    let preferred_root = current_root.as_deref().unwrap_or(index_notes_root);
 
-    let results: Vec<QueryResult> = raw
+    let filtered: Vec<_> = raw
+        .iter()
+        .cloned()
+        .filter(|(chunk, _)| {
+            chunk_note_exists(&chunk.note_path, index_notes_root, current_root.as_deref())
+        })
+        .collect();
+    let chosen = if filtered.is_empty() { raw } else { filtered };
+
+    let results: Vec<QueryResult> = chosen
         .into_iter()
         .map(|(chunk, score)| {
+            let display_path =
+                resolve_existing_note_path(&chunk.note_path, index_notes_root, current_root.as_deref())
+                    .map(|p| make_relative(preferred_root, &p))
+                    .unwrap_or_else(|| chunk.note_path.display().to_string());
             let preview: String = chunk.text.chars().take(120).collect();
             let preview = if chunk.text.len() > 120 {
                 format!("{}…", preview)
@@ -332,7 +420,7 @@ async fn query(query: String, k: Option<usize>) -> Result<Vec<QueryResult>, Stri
                 preview
             };
             QueryResult {
-                note_path: chunk.note_path.display().to_string(),
+                note_path: display_path,
                 score,
                 preview: preview.trim().to_string(),
                 text: chunk.text,
@@ -381,13 +469,19 @@ async fn ask(
     if let Ok(notes) = scan_notes(Path::new(&idx.settings.notes_root)) {
         for n in notes {
             if let Some(fm) = n.frontmatter.as_ref() {
-                let key = n.path.display().to_string();
-                note_meta.insert(
-                    key,
-                    NoteMeta {
-                        title: fm.title.clone(),
-                    },
-                );
+                let abs_key = n.path.display().to_string();
+                let rel_key = n
+                    .path
+                    .strip_prefix(Path::new(&idx.settings.notes_root))
+                    .ok()
+                    .map(|p| p.to_string_lossy().into_owned());
+                let meta = NoteMeta {
+                    title: fm.title.clone(),
+                };
+                note_meta.insert(abs_key, meta.clone());
+                if let Some(rel) = rel_key {
+                    note_meta.insert(rel, meta);
+                }
             }
         }
     }
@@ -402,7 +496,23 @@ async fn ask(
         .await
         .map_err(|e| e.to_string())?;
 
-    let raw_results = idx.store.search(&q_emb, effective_k);
+    let index_notes_root = Path::new(&idx.settings.notes_root);
+    let current_root = notes_root().ok();
+    let preferred_root = current_root.as_deref().unwrap_or(index_notes_root);
+    let raw_search = idx.store.search(&q_emb, effective_k.saturating_mul(3));
+    let filtered: Vec<_> = raw_search
+        .iter()
+        .cloned()
+        .filter(|(chunk, _)| {
+            chunk_note_exists(&chunk.note_path, index_notes_root, current_root.as_deref())
+        })
+        .take(effective_k)
+        .collect();
+    let raw_results: Vec<_> = if filtered.is_empty() {
+        raw_search.into_iter().take(effective_k).collect()
+    } else {
+        filtered
+    };
     if raw_results.is_empty() {
         return Err("No results.".to_string());
     }
@@ -411,11 +521,16 @@ async fn ask(
     let mut context = String::new();
     use std::fmt::Write as FmtWrite;
     for (i, (chunk, score)) in raw_results.iter().enumerate() {
-        let note_key = chunk.note_path.display().to_string();
+        let resolved = resolve_existing_note_path(&chunk.note_path, index_notes_root, current_root.as_deref());
+        let normalized = resolved
+            .as_ref()
+            .map(|p| make_relative(preferred_root, p))
+            .unwrap_or_else(|| chunk.note_path.display().to_string());
         let title = note_meta
-            .get(&note_key)
+            .get(&normalized)
+            .or_else(|| note_meta.get(&chunk.note_path.display().to_string()))
             .and_then(|m| m.title.as_deref())
-            .unwrap_or_else(|| note_key.as_str());
+            .unwrap_or_else(|| normalized.as_str());
         let _ = FmtWrite::write_fmt(
             &mut context,
             format_args!(
@@ -460,8 +575,16 @@ async fn ask(
     let sources = raw_results
         .into_iter()
         .map(|(chunk, score)| {
-            let note_key = chunk.note_path.display().to_string();
-            let title = note_meta.get(&note_key).and_then(|m| m.title.clone());
+            let resolved =
+                resolve_existing_note_path(&chunk.note_path, index_notes_root, current_root.as_deref());
+            let note_key = resolved
+                .as_ref()
+                .map(|p| make_relative(preferred_root, p))
+                .unwrap_or_else(|| chunk.note_path.display().to_string());
+            let title = note_meta
+                .get(&note_key)
+                .or_else(|| note_meta.get(&chunk.note_path.display().to_string()))
+                .and_then(|m| m.title.clone());
             AskSource {
                 note_path: note_key,
                 title,
@@ -485,6 +608,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_notes_root,
             status,
+            rebuild_index,
             list_notes,
             read_note,
             save_note,
