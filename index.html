@@ -8,149 +8,100 @@
   </head>
   <body>
     <div id="app">
-      <header class="app-header">
-        <div class="brand-block">
-          <div class="app-brand">Noema</div>
-          <div class="app-tagline">local-first life repo</div>
-        </div>
-        <div class="header-left">
-          <label for="search" class="sr-only">Search notes</label>
-          <input
-            id="search"
-            type="search"
-            placeholder="Search your life repo..."
-            autocomplete="off"
-          />
-        </div>
-        <div class="header-right">
-          <button id="new-note-btn">+ new note</button>
-        </div>
-      </header>
-
-      <div class="status-bar">
-        <span id="status" class="muted" aria-live="polite">checking…</span>
-        <div class="status-actions">
-          <span id="save-status" class="muted" aria-live="polite"></span>
-          <button type="button" id="rebuild-index-btn">rebuild index</button>
+      <!-- Splash: fades out once the graph loads -->
+      <div id="splash" class="splash">
+        <div class="splash-content">
+          <h1>Noema</h1>
+          <p>your personal space</p>
         </div>
       </div>
 
-      <section class="workflow-strip">
-        <div class="workflow-label">workspace mode</div>
-        <div class="workflow-actions" role="group" aria-label="Workspace mode">
-          <button type="button" id="mode-review-btn" class="mode-btn active" aria-pressed="true">
-            1. review
-          </button>
-          <button type="button" id="mode-capture-btn" class="mode-btn" aria-pressed="false">
-            2. capture
-          </button>
-          <button type="button" id="mode-synthesize-btn" class="mode-btn" aria-pressed="false">
-            3. synthesize
-          </button>
-        </div>
-        <div class="workflow-metrics">
-          <span class="metric-item">
-            queue <span id="metric-queue" class="metric-value">0</span>
-          </span>
-          <span class="metric-item">
-            loops <span id="metric-loops" class="metric-value">0</span>
-          </span>
-          <span class="metric-item">
-            focus <span id="metric-focus" class="metric-value">none</span>
-          </span>
-        </div>
-      </section>
-      <div id="mode-hint" class="mode-hint muted">
-        Review surfaced notes and pick one to continue.
+      <!-- Full-viewport 3D graph -->
+      <div id="graph-container"></div>
+
+      <!-- Subtle stats in top-left corner -->
+      <div id="graph-stats" class="graph-stats">
+        <span id="stat-notes">0 notes</span>
+        <span class="stats-dot">&middot;</span>
+        <span id="stat-topics">0 topics</span>
       </div>
 
-      <main class="app-main">
-        <aside class="sidebar">
-          <div class="sidebar-header">life lenses</div>
-          <div id="lens-list" class="lens-list"></div>
-          <div id="life-summary" class="life-summary muted"></div>
-          <div class="sidebar-header notes-header">notes</div>
-          <div id="note-tree" class="note-tree"></div>
-        </aside>
+      <!-- Editor panel (slides in from the right) -->
+      <aside id="editor-panel" class="editor-panel">
+        <div class="editor-header">
+          <button id="editor-close" class="panel-close-btn" aria-label="Close">&times;</button>
+          <span id="save-status" class="save-status"></span>
+        </div>
+        <label for="note-title" class="sr-only">Note title</label>
+        <input id="note-title" class="note-title" placeholder="Title" autocomplete="off" />
+        <label for="note-body" class="sr-only">Note body</label>
+        <textarea id="note-body" class="note-body" placeholder="Write your thoughts..." spellcheck="false"></textarea>
+        <div class="editor-footer">
+          <button id="delete-note-btn" class="delete-btn">Delete note</button>
+        </div>
+      </aside>
 
-        <section class="editor">
-          <section id="life-cues" class="life-cues">
-            <div id="memory-cue-column" class="cue-column">
-              <div class="cue-title">memory cues</div>
-              <div id="memory-list" class="memory-list"></div>
-            </div>
-            <div id="ritual-cue-column" class="cue-column">
-              <div class="cue-title">capture rituals</div>
-              <div id="capture-rituals" class="capture-rituals">
-                <button type="button" class="ritual-btn" data-template="reflection">
-                  daily reflection
-                </button>
-                <button type="button" class="ritual-btn" data-template="decision">
-                  decision log
-                </button>
-                <button type="button" class="ritual-btn" data-template="snapshot">
-                  memory snapshot
-                </button>
-              </div>
-            </div>
-          </section>
-          <label for="note-title" class="sr-only">Note title</label>
-          <input
-            id="note-title"
-            class="note-title"
-            placeholder="untitled"
-            autocomplete="off"
-          />
-          <label for="note-body" class="sr-only">Note body</label>
-          <textarea
-            id="note-body"
-            class="note-body"
-            spellcheck="false"
-          ></textarea>
+      <!-- Floating panels (appear above the bar) -->
+      <div id="search-panel" class="floating-panel hidden">
+        <label for="search-input" class="sr-only">Search notes</label>
+        <input id="search-input" class="panel-input" type="search" placeholder="Search your notes..." autocomplete="off" />
+        <div id="search-results" class="panel-results"></div>
+      </div>
 
-          <div
-            id="search-results"
-            class="search-results hidden"
-            role="region"
-            aria-label="Search results"
-            aria-live="polite"
-            aria-atomic="true"
-            aria-hidden="true"
-          ></div>
-        </section>
-      </main>
+      <div id="filter-panel" class="floating-panel hidden">
+        <div id="filter-list" class="filter-list"></div>
+      </div>
 
-      <footer class="chat-bar">
+      <div id="chat-panel" class="floating-panel hidden">
         <div id="chat-thread" class="chat-thread"></div>
         <div class="chat-input-row">
-          <label for="chat-input" class="sr-only">Ask AI about your notes</label>
-          <input
-            id="chat-input"
-            type="text"
-            placeholder="ask anything about your notes..."
-            autocomplete="off"
-          />
+          <label for="chat-input" class="sr-only">Ask about your notes</label>
+          <input id="chat-input" class="panel-input" type="text" placeholder="Ask about your notes..." autocomplete="off" />
           <label for="chat-model-select" class="sr-only">Model</label>
-          <select id="chat-model-select">
-            <option value="">default (config)</option>
+          <select id="chat-model-select" class="chat-model-select">
+            <option value="">default</option>
           </select>
         </div>
-      </footer>
-    </div>
+      </div>
 
-    <dialog id="delete-dialog" class="delete-dialog">
-      <form method="dialog" class="delete-dialog-content">
-        <h2 class="delete-dialog-title">Delete note?</h2>
-        <p class="delete-dialog-copy">
-          This cannot be undone.
-          <span id="delete-note-name" class="delete-note-name"></span>
-        </p>
-        <div class="delete-dialog-actions">
-          <button id="delete-cancel-btn" type="submit" value="cancel">Cancel</button>
-          <button id="delete-confirm-btn" type="button">Delete</button>
-        </div>
-      </form>
-    </dialog>
+      <!-- Floating bar (minimal, centered bottom) -->
+      <nav class="floating-bar">
+        <button id="search-btn" class="bar-btn" title="Search (⌘K)">Search</button>
+        <div class="bar-divider"></div>
+        <button id="new-btn" class="bar-btn" title="New note (⌘N)">+ New</button>
+        <div class="bar-divider"></div>
+        <button id="filter-btn" class="bar-btn" title="Toggle filters">Filter</button>
+        <div class="bar-divider"></div>
+        <button id="chat-btn" class="bar-btn" title="Chat (⌘J)">Chat</button>
+        <div class="bar-divider"></div>
+        <button id="rebuild-btn" class="bar-btn bar-btn-muted" title="Rebuild search index">Index</button>
+      </nav>
+
+      <!-- Setup dialog (first launch) -->
+      <dialog id="setup-dialog" class="setup-dialog">
+        <form method="dialog" class="setup-content">
+          <h2>Welcome to Noema</h2>
+          <p>Point Noema at the folder where your notes live. Everything stays on your device.</p>
+          <input id="setup-path" type="text" placeholder="/Users/you/notes" autocomplete="off" />
+          <button type="submit">Get Started</button>
+        </form>
+      </dialog>
+
+      <!-- Delete confirmation -->
+      <dialog id="delete-dialog" class="delete-dialog">
+        <form method="dialog" class="delete-dialog-content">
+          <h2>Delete this note?</h2>
+          <p class="delete-dialog-copy">
+            This can't be undone.
+            <span id="delete-note-name" class="delete-note-name"></span>
+          </p>
+          <div class="dialog-actions">
+            <button type="submit" value="cancel">Cancel</button>
+            <button id="delete-confirm-btn" type="button" class="danger-btn">Delete</button>
+          </div>
+        </form>
+      </dialog>
+    </div>
 
     <script type="module" src="/src/main.js"></script>
   </body>

@@ -1,21 +1,32 @@
 # Noema
 
-Local-first life repo for searching and chatting with your notes. **v0**.
+A local-first life repository visualized as a force-directed graph. Your notes become nodes, topics become clusters, and connections emerge from the shape of your thinking. Everything stays on your device.
 
-![Noema screenshot](./public/screenshot.png)
-
-## Use flow
+## Getting started
 
 1. `npm install` then `npm run tauri dev`
-2. Choose your notes folder when prompted; click **rebuild index**
-3. Write notes, use search, ask questions in chat and open sources with `[1]`, `[2]`, etc.
+2. Choose your notes folder when prompted
+3. Click **Index** in the floating bar to build the search index
+4. Create notes, explore the graph, search with `Cmd+K`, ask questions with `Cmd+J`
 
-## Daily use
+## The graph
 
-Add or edit notes, rebuild index when needed, ask questions and follow source links.
+- **Center node**: "My Life" — everything branches from here
+- **Topic nodes**: auto-inferred clusters (Learning, Self, Work, Health, etc.)
+- **Note nodes**: your individual notes, orbiting their topic
+- **Related links**: green connections drawn when you open a note, revealing semantic similarity
+
+## Shortcuts
+
+| Action     | Shortcut |
+|------------|----------|
+| New note   | `Cmd+N`  |
+| Search     | `Cmd+K`  |
+| Chat       | `Cmd+J`  |
+| Close      | `Esc`    |
 
 ## Troubleshooting
 
-- No results → **rebuild index**
-- AI errors → ensure Ollama is running
+- No search results → click **Index** to rebuild
+- AI errors → ensure Ollama is running (`ollama serve`)
 - Wrong folder → restart and set the notes folder again
