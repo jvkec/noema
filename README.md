@@ -1,6 +1,10 @@
 # Noema
 
+<<<<<<< HEAD
 A local-first life repository visualized as a force-directed graph. Your notes become nodes, topics become clusters, and connections emerge from the shape of your thinking. Everything stays on your device.
+=======
+A local-first life repo for searching and chatting with your notes. **v0**.
+>>>>>>> cc699c1751b5c7f90ef1a7c442e06f66219cde96
 
 ## Getting started
 
