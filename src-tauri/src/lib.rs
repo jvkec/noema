@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use noema_core::{
-    build_memory_overview, build_persisted_index, default_index_path,
+    build_memory_overview, build_persisted_index, default_index_path, extract_note_signals,
     get_notes_root as core_get_notes_root, load_config, scan_notes, set_notes_root as core_set_notes_root,
     ChunkKind, IndexSettings, MemoryOverview, OllamaClient, PersistedIndex, DEFAULT_BASE_URL, DEFAULT_CHAT_MODEL,
     DEFAULT_EMBED_MODEL, DEFAULT_MAX_CHARS, INDEX_SCHEMA_VERSION,
@@ -108,6 +108,7 @@ fn join_note_content(title: &str, body: &str) -> String {
 pub struct NoteListItem {
     pub path: String,
     pub title: String,
+    pub topic: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -257,7 +258,13 @@ fn list_notes() -> Result<Vec<NoteListItem>, String> {
                         .map(|s| s.trim().to_string())
                 })
                 .unwrap_or_else(|| rel.clone());
-            NoteListItem { path: rel, title }
+            let signals = extract_note_signals(&n);
+            let topic = signals
+                .life_areas
+                .first()
+                .map(|a| a.as_str().to_string())
+                .unwrap_or_else(|| "learning".to_string());
+            NoteListItem { path: rel, title, topic }
         })
         .collect();
     items.sort_by(|a, b| a.path.cmp(&b.path));
