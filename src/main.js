@@ -17,6 +17,11 @@ let saveStatus = "";
 let sidebarVisible = false;
 let sidebarTimer = null;
 let selectedFolder = null;
+let sidebarPinned = false;
+
+const SIDEBAR_HIDE_DELAY_MS = 120;
+const SIDEBAR_OPEN_TRANSITION_MS = 220;
+const SIDEBAR_CLOSE_TRANSITION_MS = 160;
 
 let utilityQuery = "";
 let filterResults = [];
@@ -27,11 +32,17 @@ let askResponse = null;
 let isAsking = false;
 let utilityMode = "idle";
 let utilityFocused = false;
+let utilityHideTimer = null;
+let utilityModelExitTimer = null;
 
 let chatModels = [];
 let selectedModel = null;
 
 let createPromise = null;
+
+const UTILITY_PANEL_EXIT_MS = 140;
+const UTILITY_MODEL_EXIT_DELAY_MS = 200;
+const STATUS_FADE_MS = 200;
 
 // ─── DOM refs (set once in renderApp) ───────────────
 
@@ -173,6 +184,8 @@ function renderApp() {
   const app = document.getElementById("app");
   app.innerHTML = "";
 
+  sidebarPinned = localStorage.getItem("noema.sidebarPinned") === "1";
+
   // Error bar
   errorBarEl = h("div", {
     role: "alert",
@@ -207,7 +220,7 @@ function renderApp() {
     h("div", { className: "flex flex-1 min-h-0" }, folderListEl, noteListEl),
     h(
       "div",
-      { className: "border-t border-stone-100 px-4 py-3 flex gap-4" },
+      { className: "border-t border-stone-100 px-4 py-3 flex gap-4 items-center" },
       h(
         "button",
         {
@@ -216,6 +229,17 @@ function renderApp() {
           onClick: showNewFolderInput,
         },
         "+ new folder",
+      ),
+      h(
+        "button",
+        {
+          id: "sidebar-pin-btn",
+          className:
+            "text-sm text-stone-400 hover:text-stone-600 focus:outline-none focus-visible:ring-1 focus-visible:ring-stone-400 rounded",
+          "aria-pressed": sidebarPinned ? "true" : "false",
+          onClick: () => setSidebarPinned(!sidebarPinned),
+        },
+        sidebarPinned ? "pinned" : "pin",
       ),
       h(
         "button",
@@ -246,21 +270,27 @@ function renderApp() {
   utilityInputEl.addEventListener("blur", () => {
     setTimeout(() => {
       if (panelHover) return;
+      if (utilityResultsEl?.contains(document.activeElement)) return;
       utilityFocused = false;
       updateUtilityPanel();
     }, 150);
   });
 
-  utilityResultsEl = h("div", { className: "hidden mb-1" });
+  utilityResultsEl = h("div", {
+    className:
+      "hidden mb-1 transition-opacity duration-150 ease-out opacity-0 translate-y-1",
+  });
   let panelHover = false;
   utilityResultsEl.addEventListener("mouseenter", () => { panelHover = true; });
   utilityResultsEl.addEventListener("mouseleave", () => {
     panelHover = false;
+    if (utilityResultsEl.contains(document.activeElement)) return;
     if (!utilityInputEl.matches(":focus")) {
       utilityFocused = false;
       updateUtilityPanel();
     }
   });
+  utilityResultsEl.addEventListener("mousedown", () => { panelHover = true; });
 
   const newNoteBarBtn = h("button", {
     className:
@@ -273,7 +303,7 @@ function renderApp() {
     "div",
     {
       className:
-        "fixed bottom-6 left-1/2 -translate-x-1/2 z-20 w-full max-w-lg px-6",
+        "fixed bottom-6 left-1/2 -translate-x-1/2 z-20 w-full max-w-xl px-6",
     },
     utilityResultsEl,
     h(
@@ -304,7 +334,7 @@ function renderApp() {
         "button",
         {
           className:
-            "text-sm text-stone-400 hover:text-stone-700 focus:outline-none focus-visible:ring-1 focus-visible:ring-stone-400 rounded",
+            "text-sm text-stone-400 hover:text-stone-700 focus:outline-none rounded",
           onClick: () => document.getElementById("delete-dialog").close(),
         },
         "cancel",
@@ -327,6 +357,8 @@ function renderApp() {
   app.appendChild(sidebarEl);
   app.appendChild(utilityBar);
   app.appendChild(deleteDialog);
+
+  if (sidebarPinned) slideSidebar(true);
 
   updateCanvas();
   updateSidebarContent();
@@ -363,43 +395,12 @@ function updateCanvas() {
   });
   bodyAreaEl.addEventListener("input", onBodyInput);
 
-  const statusItems = [];
-  if (saveStatus) {
-    const isError = saveStatus.startsWith("Error");
-    let label = saveStatus;
-    if (saveStatus === "saved") label = "saved";
-    else if (saveStatus === "saving") label = "saving\u2026";
-    statusItems.push(
-      h(
-        "span",
-        { className: `text-xs ${isError ? "text-red-500" : "text-stone-400"}` },
-        label,
-      ),
-    );
-  }
-  if (selectedNote) {
-    statusItems.push(
-      h(
-        "button",
-        {
-          className:
-            "text-xs text-stone-400 hover:text-red-500 focus:outline-none focus-visible:ring-1 focus-visible:ring-stone-400 rounded px-1 py-0.5",
-          onClick: () =>
-            document.getElementById("delete-dialog")?.showModal(),
-          "aria-label": "Delete note",
-        },
-        "delete",
-      ),
-    );
-  }
-
   const statusLine = h(
     "div",
     {
       className: "flex justify-end items-center gap-3 mb-6 min-h-5",
       "data-status-line": "",
     },
-    ...statusItems,
   );
 
   canvasEl.appendChild(
@@ -415,6 +416,7 @@ function updateCanvas() {
       ),
     ),
   );
+  patchStatus();
 
   if (!selectedNote?.title) {
     titleInputEl.focus();
@@ -459,10 +461,11 @@ async function ensureNote() {
 // ─── Sidebar ────────────────────────────────────────
 
 function slideSidebar(visible) {
+  if (sidebarPinned) visible = true;
   sidebarVisible = visible;
   sidebarEl.style.transition = visible
-    ? "translate 1200ms cubic-bezier(0.22, 1, 0.36, 1)"
-    : "translate 400ms cubic-bezier(0.4, 0, 0.2, 1)";
+    ? `translate ${SIDEBAR_OPEN_TRANSITION_MS}ms cubic-bezier(0.22, 1, 0.36, 1)`
+    : `translate ${SIDEBAR_CLOSE_TRANSITION_MS}ms cubic-bezier(0.4, 0, 0.2, 1)`;
   if (visible) {
     sidebarEl.classList.remove("-translate-x-[calc(100%+32px)]");
     sidebarEl.classList.add("translate-x-0");
@@ -478,13 +481,30 @@ function onSidebarEnter() {
 }
 
 function onSidebarLeave() {
+  if (sidebarPinned) return;
   clearTimeout(sidebarTimer);
-  sidebarTimer = setTimeout(() => slideSidebar(false), 500);
+  sidebarTimer = setTimeout(() => slideSidebar(false), SIDEBAR_HIDE_DELAY_MS);
 }
 
 function toggleSidebar() {
   clearTimeout(sidebarTimer);
   slideSidebar(!sidebarVisible);
+}
+
+function setSidebarPinned(next) {
+  sidebarPinned = Boolean(next);
+  localStorage.setItem("noema.sidebarPinned", sidebarPinned ? "1" : "0");
+
+  const btn = document.getElementById("sidebar-pin-btn");
+  if (btn) {
+    btn.textContent = sidebarPinned ? "pinned" : "pin";
+    btn.setAttribute("aria-pressed", sidebarPinned ? "true" : "false");
+  }
+
+  if (sidebarPinned) {
+    clearTimeout(sidebarTimer);
+    slideSidebar(true);
+  }
 }
 
 function showNewFolderInput() {
@@ -522,9 +542,55 @@ function showNewFolderInput() {
 }
 
 function noteDisplayName(note) {
-  const t = note.title?.trim();
-  if (!t || t === note.path || /^note-\d+/.test(t)) return "new note";
-  return t;
+  const p = note?.path?.trim();
+  if (!p) return "new note";
+  const filename = p.split("/").pop() || p;
+  return filename.replace(/\.md$/i, "") || "new note";
+}
+
+function filenameFromTitle(title) {
+  const t = String(title ?? "").trim();
+  if (!t) return null;
+  const base = t
+    .replaceAll(/\s+/g, " ")
+    .trim()
+    .replaceAll("/", "-")
+    .replaceAll("\\", "-")
+    .replaceAll(/[:*?"<>|]/g, "-")
+    .replaceAll(".", "-")
+    .replaceAll(/\s+/g, "-")
+    .replaceAll(/-+/g, "-")
+    .replaceAll(/^-|-$/g, "")
+    .slice(0, 80);
+  return base ? `${base}.md` : null;
+}
+
+async function maybeRenameNoteToMatchTitle() {
+  if (!selectedNote?.path) return;
+  const desiredFilename = filenameFromTitle(selectedNote.title);
+  if (!desiredFilename) return;
+
+  const parts = selectedNote.path.split("/");
+  const currentFilename = parts.pop() || "";
+  if (currentFilename.toLowerCase() === desiredFilename.toLowerCase()) return;
+
+  const folder = parts.join("/");
+  const base = desiredFilename.replace(/\.md$/i, "");
+  for (let i = 0; i < 20; i++) {
+    const suffix = i === 0 ? "" : `-${i + 1}`;
+    const dest = folder ? `${folder}/${base}${suffix}.md` : `${base}${suffix}.md`;
+    try {
+      await invoke("move_note", { source: selectedNote.path, dest });
+      selectedNote.path = dest;
+      return;
+    } catch (e) {
+      const msg = String(e ?? "");
+      const looksLikeCollision =
+        /exist/i.test(msg) || /already/i.test(msg) || /collision/i.test(msg);
+      if (!looksLikeCollision) throw e;
+    }
+  }
+  throw new Error("too many filename collisions");
 }
 
 function buildTree(notesList) {
@@ -837,6 +903,11 @@ function renderDefaultPanel() {
     const select = modelRow.querySelector("select");
     select.addEventListener("change", (e) => {
       selectedModel = e.target.value;
+      if (utilityModelExitTimer) clearTimeout(utilityModelExitTimer);
+      utilityModelExitTimer = setTimeout(() => {
+        utilityModelExitTimer = null;
+        hideUtilityResults();
+      }, UTILITY_MODEL_EXIT_DELAY_MS);
     });
     items.push(modelRow);
   }
@@ -848,38 +919,79 @@ function renderDefaultPanel() {
   }, ...items);
 }
 
+function showUtilityResults(panelEl) {
+  if (!utilityResultsEl) return;
+  if (utilityModelExitTimer) {
+    clearTimeout(utilityModelExitTimer);
+    utilityModelExitTimer = null;
+  }
+  if (utilityHideTimer) {
+    clearTimeout(utilityHideTimer);
+    utilityHideTimer = null;
+  }
+  utilityResultsEl.innerHTML = "";
+  utilityResultsEl.classList.remove("hidden");
+  utilityResultsEl.appendChild(panelEl);
+  // Reset to a known "hidden" visual state so entry always animates.
+  utilityResultsEl.classList.remove("opacity-100", "translate-y-0");
+  utilityResultsEl.classList.add("opacity-0", "translate-y-1");
+  requestAnimationFrame(() => {
+    utilityResultsEl.classList.remove("opacity-0", "translate-y-1");
+    utilityResultsEl.classList.add("opacity-100", "translate-y-0");
+  });
+}
+
+function hideUtilityResults() {
+  if (!utilityResultsEl) return;
+  utilityResultsEl.classList.remove("opacity-100", "translate-y-0");
+  utilityResultsEl.classList.add("opacity-0", "translate-y-1");
+  if (utilityHideTimer) clearTimeout(utilityHideTimer);
+  utilityHideTimer = setTimeout(() => {
+    // Only fully hide if nothing reopened it.
+    if (utilityResultsEl.classList.contains("opacity-0")) {
+      utilityResultsEl.classList.add("hidden");
+      utilityResultsEl.innerHTML = "";
+    }
+    utilityHideTimer = null;
+  }, UTILITY_PANEL_EXIT_MS);
+}
+
 function updateUtilityPanel() {
   if (!utilityResultsEl) return;
-  utilityResultsEl.innerHTML = "";
 
   if (utilityMode === "ask") {
-    utilityResultsEl.classList.remove("hidden");
-    utilityResultsEl.appendChild(renderAskPanel());
+    showUtilityResults(renderAskPanel());
     return;
   }
 
   if (utilityMode === "search") {
-    utilityResultsEl.classList.remove("hidden");
-    utilityResultsEl.appendChild(renderSearchPanel());
+    showUtilityResults(renderSearchPanel());
     return;
   }
 
   if (utilityMode === "filter") {
-    utilityResultsEl.classList.remove("hidden");
-    utilityResultsEl.appendChild(renderFilterPanel());
+    // Avoid rendering an empty bordered panel (shows as a thin grey line).
+    if (filterResults.length === 0) {
+      hideUtilityResults();
+      return;
+    }
+    showUtilityResults(renderFilterPanel());
     return;
   }
 
-  if (utilityFocused && utilityMode === "idle") {
+  const caretActive =
+    utilityInputEl?.matches(":focus") ||
+    utilityResultsEl.contains(document.activeElement);
+
+  if (caretActive && utilityMode === "idle") {
     const panel = renderDefaultPanel();
     if (panel) {
-      utilityResultsEl.classList.remove("hidden");
-      utilityResultsEl.appendChild(panel);
+      showUtilityResults(panel);
       return;
     }
   }
 
-  utilityResultsEl.classList.add("hidden");
+  hideUtilityResults();
 }
 
 function clearUtilityResults() {
@@ -937,6 +1049,12 @@ async function flushSave() {
     saveStatus = "saved";
     patchStatus();
 
+    try {
+      await maybeRenameNoteToMatchTitle();
+    } catch (e) {
+      showError("Failed to rename file: " + e);
+    }
+
     await refreshNotes();
     updateSidebarContent();
 
@@ -952,42 +1070,84 @@ async function flushSave() {
   }
 }
 
+function fadeInNextFrame(el) {
+  requestAnimationFrame(() => el.classList.remove("opacity-0"));
+}
+
 function patchStatus() {
   const line = canvasEl?.querySelector("[data-status-line]");
   if (!line) return;
-  line.innerHTML = "";
 
-  if (saveStatus) {
+  function updateSaveStatus() {
+    const statusEl = line.querySelector("[data-save-status]");
+    if (!saveStatus) {
+      if (!statusEl) return;
+      statusEl.classList.add("opacity-0");
+      setTimeout(() => {
+        if (statusEl.isConnected && saveStatus === "") statusEl.remove();
+      }, STATUS_FADE_MS);
+      return;
+    }
+
     const isError = saveStatus.startsWith("Error");
     let label = saveStatus;
     if (saveStatus === "saved") label = "saved";
     else if (saveStatus === "saving") label = "saving\u2026";
-    line.appendChild(
-      h(
-        "span",
-        {
-          className: `text-xs ${isError ? "text-red-500" : "text-stone-400"}`,
-        },
-        label,
-      ),
+
+    if (statusEl) {
+      statusEl.textContent = label;
+      statusEl.classList.toggle("text-red-500", isError);
+      statusEl.classList.toggle("text-stone-400", !isError);
+      statusEl.classList.remove("opacity-0");
+      return;
+    }
+
+    const el = h(
+      "span",
+      {
+        "data-save-status": "",
+        className: `text-xs transition-opacity ease-out opacity-0 duration-[${STATUS_FADE_MS}ms] ${isError ? "text-red-500" : "text-stone-400"}`,
+      },
+      label,
     );
+    line.prepend(el);
+    fadeInNextFrame(el);
   }
 
-  if (selectedNote) {
-    line.appendChild(
-      h(
-        "button",
-        {
-          className:
-            "text-xs text-stone-400 hover:text-red-500 focus:outline-none focus-visible:ring-1 focus-visible:ring-stone-400 rounded px-1 py-0.5",
-          onClick: () =>
-            document.getElementById("delete-dialog")?.showModal(),
-          "aria-label": "Delete note",
-        },
-        "delete",
-      ),
+  function updateDeleteBtn() {
+    const deleteBtn = line.querySelector("[data-delete-btn]");
+    if (!selectedNote) {
+      if (!deleteBtn) return;
+      deleteBtn.classList.add("opacity-0");
+      setTimeout(() => {
+        if (deleteBtn.isConnected && selectedNote === null) deleteBtn.remove();
+      }, STATUS_FADE_MS);
+      return;
+    }
+
+    if (deleteBtn) {
+      deleteBtn.classList.remove("opacity-0");
+      return;
+    }
+
+    const btn = h(
+      "button",
+      {
+        "data-delete-btn": "",
+        className:
+          `text-xs text-stone-400 hover:text-red-500 focus:outline-none focus-visible:ring-1 focus-visible:ring-stone-400 rounded px-1 py-0.5 transition-opacity ease-out opacity-0 duration-[${STATUS_FADE_MS}ms]`,
+        onClick: () =>
+          document.getElementById("delete-dialog")?.showModal(),
+        "aria-label": "Delete note",
+      },
+      "delete",
     );
+    line.appendChild(btn);
+    fadeInNextFrame(btn);
   }
+
+  updateSaveStatus();
+  updateDeleteBtn();
 }
 
 async function doDelete() {
