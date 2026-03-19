@@ -316,7 +316,7 @@ fn save_note(path: String, title: String, body: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn create_note() -> Result<NoteDetail, String> {
+fn create_note(folder: Option<String>) -> Result<NoteDetail, String> {
     use std::time::{SystemTime, UNIX_EPOCH};
     let root = notes_root()?;
     let ts = SystemTime::now()
@@ -324,11 +324,24 @@ fn create_note() -> Result<NoteDetail, String> {
         .unwrap_or_default()
         .as_secs();
     let filename = format!("note-{}.md", ts);
-    let abs = root.join(&filename);
+
+    let dir = match &folder {
+        Some(f) if !f.is_empty() => {
+            let sub = root.join(f.trim_matches('/'));
+            if !sub.starts_with(&root) {
+                return Err("Folder path is outside notes root".to_string());
+            }
+            fs::create_dir_all(&sub)
+                .map_err(|e| format!("Failed to create folder: {}", e))?;
+            sub
+        }
+        _ => root.clone(),
+    };
+
+    let abs = dir.join(&filename);
     if abs.exists() {
-        // Extremely unlikely; fall back to a random suffix.
         let alt = format!("note-{}-{}.md", ts, rand_suffix());
-        let abs_alt = root.join(&alt);
+        let abs_alt = dir.join(&alt);
         fs::write(&abs_alt, "").map_err(|e| format!("Failed to create note: {}", e))?;
         return Ok(NoteDetail {
             path: make_relative(&root, &abs_alt),
@@ -387,6 +400,45 @@ fn delete_note(path: String) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+#[tauri::command]
+fn move_note(source: String, dest: String) -> Result<String, String> {
+    let root = notes_root()?;
+    let src = root.join(Path::new(&source));
+    let dst = root.join(Path::new(&dest));
+    if !src.starts_with(&root) || !dst.starts_with(&root) {
+        return Err("Path is outside notes root".to_string());
+    }
+    if !src.is_file() {
+        return Err(format!("Source note does not exist: {}", source));
+    }
+    if dst.exists() {
+        return Err(format!("Destination already exists: {}", dest));
+    }
+    fs::create_dir_all(
+        dst.parent()
+            .ok_or_else(|| "Invalid destination path".to_string())?,
+    )
+    .map_err(|e| format!("Failed to create destination folder: {}", e))?;
+    fs::rename(&src, &dst).map_err(|e| format!("Failed to move note: {}", e))?;
+
+    if let Some(index_path) = default_index_path() {
+        if let Ok(mut idx) = PersistedIndex::load_from_file(&index_path) {
+            let old_rel = make_relative(&root, &src);
+            idx.store.remove_note(&src);
+            idx.store.remove_note(Path::new(&old_rel));
+            idx.note_states.remove(&src.to_string_lossy().into_owned());
+            idx.note_states.remove(&old_rel);
+            idx.updated_at_unix = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64;
+            let _ = idx.save_to_file(&index_path);
+        }
+    }
+
+    Ok(make_relative(&root, &dst))
 }
 
 #[tauri::command]
@@ -660,6 +712,7 @@ pub fn run() {
             save_note,
             create_note,
             delete_note,
+            move_note,
             memory_overview,
             query,
             ask,
