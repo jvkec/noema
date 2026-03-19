@@ -563,13 +563,13 @@ function collectNotes(node) {
 const sidebarBtnBase =
   "block w-full text-left px-4 py-1.5 text-sm focus:outline-none focus-visible:ring-1 focus-visible:ring-stone-400 rounded";
 
-function makeFolderBtn(label, count, folderKey) {
+function makeFolderBtn(label, count, folderKey, depth = 0) {
   const active = selectedFolder === folderKey;
-  const isDropTarget = folderKey !== null && folderKey !== "__root__";
   const btn = h(
     "button",
     {
       className: `${sidebarBtnBase} transition-colors ${active ? "text-stone-900" : "text-stone-400 hover:text-stone-700"}`,
+      style: { paddingLeft: `${16 + depth * 12}px` },
       onClick: () => {
         selectedFolder = folderKey;
         updateSidebarContent();
@@ -587,36 +587,6 @@ function makeFolderBtn(label, count, folderKey) {
     ),
   );
 
-  if (isDropTarget) {
-    btn.addEventListener("dragover", (e) => {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = "move";
-      btn.classList.add("bg-stone-100");
-    });
-    btn.addEventListener("dragleave", () => {
-      btn.classList.remove("bg-stone-100");
-    });
-    btn.addEventListener("drop", async (e) => {
-      e.preventDefault();
-      btn.classList.remove("bg-stone-100");
-      const notePath = e.dataTransfer.getData("text/plain");
-      if (!notePath) return;
-      const filename = notePath.split("/").pop();
-      const newPath = `${folderKey}/${filename}`;
-      if (newPath === notePath) return;
-      try {
-        await invoke("move_note", { source: notePath, dest: newPath });
-        if (selectedNote?.path === notePath) {
-          selectedNote.path = newPath;
-        }
-        await refreshNotes();
-        updateSidebarContent();
-      } catch (err) {
-        showError("Failed to move note: " + err);
-      }
-    });
-  }
-
   return btn;
 }
 
@@ -628,17 +598,37 @@ function rootFolderName() {
 
 function renderFolderList(tree) {
   folderListEl.appendChild(
-    makeFolderBtn(rootFolderName(), notes.length, null),
+    makeFolderBtn(rootFolderName(), notes.length, null, 0),
   );
 
-  for (const [name, child] of tree.folders) {
-    folderListEl.appendChild(makeFolderBtn(name, countNotes(child), name));
+  function renderFolderNode(node, prefix, depth) {
+    for (const [name, child] of node.folders) {
+      const folderKey = prefix ? `${prefix}/${name}` : name;
+      folderListEl.appendChild(
+        makeFolderBtn(name, countNotes(child), folderKey, depth),
+      );
+      renderFolderNode(child, folderKey, depth + 1);
+    }
   }
+
+  renderFolderNode(tree, "", 1);
+}
+
+function getFolderNodeByKey(tree, folderKey) {
+  if (!folderKey) return tree;
+  const segments = folderKey.split("/").filter(Boolean);
+  let node = tree;
+  for (const seg of segments) {
+    const next = node.folders.get(seg);
+    if (!next) return null;
+    node = next;
+  }
+  return node;
 }
 
 function getDisplayNotes(tree) {
   if (selectedFolder === null) return notes;
-  const folderNode = tree.folders.get(selectedFolder);
+  const folderNode = getFolderNodeByKey(tree, selectedFolder);
   return folderNode ? collectNotes(folderNode) : [];
 }
 
@@ -650,9 +640,6 @@ function renderNoteList(displayNotes) {
     return;
   }
 
-  const canDrag =
-    selectedFolder !== null && selectedFolder !== "__root__";
-
   for (const note of displayNotes) {
     const active = selectedNote?.path === note.path;
     const label = noteDisplayName(note);
@@ -661,7 +648,7 @@ function renderNoteList(displayNotes) {
       {
         role: "button",
         tabindex: "0",
-        className: `${sidebarBtnBase} truncate ${canDrag ? "cursor-grab active:cursor-grabbing" : ""} ${active ? "text-stone-900 bg-stone-100" : "text-stone-500 hover:text-stone-900"}`,
+        className: `${sidebarBtnBase} truncate ${active ? "text-stone-900 bg-stone-100" : "text-stone-500 hover:text-stone-900"}`,
         onClick: () => selectNote(note.path),
       },
       label,
@@ -672,18 +659,6 @@ function renderNoteList(displayNotes) {
         selectNote(note.path);
       }
     });
-
-    if (canDrag) {
-      item.draggable = true;
-      item.addEventListener("dragstart", (e) => {
-        e.dataTransfer.setData("text/plain", note.path);
-        e.dataTransfer.effectAllowed = "move";
-        item.style.opacity = "0.4";
-      });
-      item.addEventListener("dragend", () => {
-        item.style.opacity = "";
-      });
-    }
 
     noteListEl.appendChild(item);
   }
