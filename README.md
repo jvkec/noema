@@ -2,7 +2,7 @@
 
 Noema is a small, local-first app for your notes: search across them, or **ask** questions and get answers grounded in what you’ve actually written. Everything goes through **[Ollama](https://ollama.com)** on your computer—no API keys, no cloud unless you want one.
 
-![Noema screenshot](noema/public/screenshot.png)
+![Noema screenshot](public/screenshot.png)
 
 ## What you need
 
