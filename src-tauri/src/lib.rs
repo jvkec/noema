@@ -12,6 +12,9 @@ use noema_core::{
 };
 use serde::Serialize;
 
+const MIN_ASK_SOURCE_SCORE: f32 = 0.25;
+const MIN_ASK_SOURCE_RATIO: f32 = 0.8;
+
 fn notes_root() -> Result<PathBuf, String> {
     match core_get_notes_root() {
         Some(p) => {
@@ -69,29 +72,8 @@ fn resolve_existing_note_path(
 }
 
 fn split_note_content(raw: &str) -> (String, String) {
-    // Very simple heuristic: first non-empty line is the title, rest is body.
-    let mut lines: Vec<&str> = raw.lines().collect();
-    if lines.is_empty() {
-        return ("".to_string(), "".to_string());
-    }
-    let mut title = String::new();
-    let mut first_body_idx = 0usize;
-    for (idx, line) in lines.iter().enumerate() {
-        if !line.trim().is_empty() {
-            title = line.trim().to_string();
-            first_body_idx = idx + 1;
-            break;
-        }
-    }
-    if title.is_empty() {
-        return ("".to_string(), raw.to_string());
-    }
-    let body = if first_body_idx >= lines.len() {
-        String::new()
-    } else {
-        lines.split_off(first_body_idx).join("\n")
-    };
-    (title, body)
+    let (frontmatter_title, body_without_frontmatter) = parse_frontmatter_title(raw);
+    split_title_and_body_from_text(frontmatter_title.as_deref(), &body_without_frontmatter)
 }
 
 fn join_note_content(title: &str, body: &str) -> String {
@@ -130,6 +112,8 @@ pub struct QueryResult {
 pub struct AskSource {
     pub note_path: String,
     pub title: Option<String>,
+    pub excerpt: String,
+    pub kind: String,
     pub chunk_index: usize,
     pub score: f32,
 }
@@ -139,6 +123,129 @@ pub struct AskResponse {
     pub question: String,
     pub answer: String,
     pub sources: Vec<AskSource>,
+}
+
+fn parse_frontmatter_title(raw: &str) -> (Option<String>, String) {
+    let trimmed = raw.trim_start();
+    if !trimmed.starts_with("---") {
+        return (None, raw.to_string());
+    }
+
+    let Some(after_open) = trimmed.strip_prefix("---") else {
+        return (None, raw.to_string());
+    };
+    let Some(close_idx) = after_open.find("\n---") else {
+        return (None, raw.to_string());
+    };
+
+    let (yaml_block, rest) = after_open.split_at(close_idx);
+    let yaml_str = yaml_block.trim_start_matches('\n').trim();
+    let body = rest.trim_start_matches("\n---").trim_start().to_string();
+    if yaml_str.is_empty() {
+        return (None, body);
+    }
+
+    let title = yaml_str
+        .lines()
+        .find_map(|line| {
+            let trimmed = line.trim();
+            let value = trimmed.strip_prefix("title:")?.trim();
+            Some(value.trim_matches('"').trim_matches('\'').trim().to_string())
+        })
+        .filter(|s| !s.is_empty());
+
+    (title, body)
+}
+
+fn split_title_and_body_from_text(frontmatter_title: Option<&str>, text: &str) -> (String, String) {
+    if let Some(title) = frontmatter_title.map(str::trim).filter(|s| !s.is_empty()) {
+        return (title.to_string(), text.trim().to_string());
+    }
+
+    let body = text.trim();
+    if body.is_empty() {
+        return (String::new(), String::new());
+    }
+
+    let lines: Vec<&str> = text.lines().collect();
+    let Some(first_idx) = lines.iter().position(|line| !line.trim().is_empty()) else {
+        return (String::new(), String::new());
+    };
+
+    let first_line = lines[first_idx].trim();
+    let heading_title = first_line
+        .strip_prefix('#')
+        .map(|rest| rest.trim_start_matches('#').trim())
+        .filter(|s| !s.is_empty());
+    if let Some(title) = heading_title {
+        let rest = if first_idx + 1 < lines.len() {
+            lines[first_idx + 1..].join("\n").trim().to_string()
+        } else {
+            String::new()
+        };
+        return (title.to_string(), rest);
+    }
+
+    let has_following_content = lines[first_idx + 1..]
+        .iter()
+        .any(|line| !line.trim().is_empty());
+    if !has_following_content {
+        return (first_line.to_string(), String::new());
+    }
+
+    let mut idx = first_idx + 1;
+    let mut saw_blank = false;
+    while idx < lines.len() && lines[idx].trim().is_empty() {
+        saw_blank = true;
+        idx += 1;
+    }
+    if saw_blank {
+        let rest = if idx < lines.len() {
+            lines[idx..].join("\n").trim().to_string()
+        } else {
+            String::new()
+        };
+        return (first_line.to_string(), rest);
+    }
+
+    (String::new(), body.to_string())
+}
+
+fn derive_note_title(raw: &str, fallback_path: &str) -> String {
+    let (title, _) = split_note_content(raw);
+    if !title.is_empty() {
+        return title;
+    }
+    fallback_path.to_string()
+}
+
+fn snippet_preview(text: &str, max_chars: usize) -> String {
+    let single_line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if single_line.chars().count() <= max_chars {
+        return single_line;
+    }
+    let preview: String = single_line.chars().take(max_chars).collect();
+    format!("{}…", preview.trim_end())
+}
+
+fn filter_ask_results_by_score(
+    results: Vec<(noema_core::Chunk, f32)>,
+) -> Vec<(noema_core::Chunk, f32)> {
+    let Some((_, top_score)) = results.first() else {
+        return results;
+    };
+    let threshold = MIN_ASK_SOURCE_SCORE.max(*top_score * MIN_ASK_SOURCE_RATIO);
+    let mut filtered: Vec<_> = results
+        .iter()
+        .cloned()
+        .filter(|(_, score)| *score >= threshold)
+        .collect();
+    if filtered.is_empty() {
+        if let Some(first) = results.into_iter().next() {
+            filtered.push(first);
+        }
+    }
+    filtered
 }
 
 #[tauri::command]
@@ -247,17 +354,7 @@ fn list_notes() -> Result<Vec<NoteListItem>, String> {
         .into_iter()
         .map(|n| {
             let rel = make_relative(&root, &n.path);
-            let title = n
-                .frontmatter
-                .as_ref()
-                .and_then(|fm| fm.title.clone())
-                .or_else(|| {
-                    n.body
-                        .lines()
-                        .find(|l| !l.trim().is_empty())
-                        .map(|s| s.trim().to_string())
-                })
-                .unwrap_or_else(|| rel.clone());
+            let title = derive_note_title(&n.raw, &rel);
             let signals = extract_note_signals(&n);
             let topic = signals
                 .life_areas
@@ -557,20 +654,19 @@ async fn ask(
     let mut note_meta: HashMap<String, NoteMeta> = HashMap::new();
     if let Ok(notes) = scan_notes(Path::new(&idx.settings.notes_root)) {
         for n in notes {
-            if let Some(fm) = n.frontmatter.as_ref() {
-                let abs_key = n.path.display().to_string();
-                let rel_key = n
-                    .path
-                    .strip_prefix(Path::new(&idx.settings.notes_root))
-                    .ok()
-                    .map(|p| p.to_string_lossy().into_owned());
-                let meta = NoteMeta {
-                    title: fm.title.clone(),
-                };
-                note_meta.insert(abs_key, meta.clone());
-                if let Some(rel) = rel_key {
-                    note_meta.insert(rel, meta);
-                }
+            let abs_key = n.path.display().to_string();
+            let rel_key = n
+                .path
+                .strip_prefix(Path::new(&idx.settings.notes_root))
+                .ok()
+                .map(|p| p.to_string_lossy().into_owned());
+            let title = derive_note_title(&n.raw, &abs_key);
+            let meta = NoteMeta {
+                title: Some(title),
+            };
+            note_meta.insert(abs_key, meta.clone());
+            if let Some(rel) = rel_key {
+                note_meta.insert(rel, meta);
             }
         }
     }
@@ -617,6 +713,7 @@ async fn ask(
             }
         }
     }
+    let raw_results = filter_ask_results_by_score(raw_results);
     if raw_results.is_empty() {
         return Err("No results.".to_string());
     }
@@ -624,17 +721,16 @@ async fn ask(
     // Build context from top chunks.
     let mut context = String::new();
     use std::fmt::Write as FmtWrite;
-    for (i, (chunk, score)) in raw_results.iter().enumerate() {
+    for (i, (chunk, _score)) in raw_results.iter().enumerate() {
         let _ = FmtWrite::write_fmt(
             &mut context,
             format_args!(
-                "[{}][{}] (score {:.3})\n{}\n\n",
+                "[{}][{}]\n{}\n\n",
                 i + 1,
                 match chunk.kind {
                     ChunkKind::Title => "title",
                     ChunkKind::Body => "body",
                 },
-                score,
                 chunk.text
             ),
         );
@@ -685,6 +781,11 @@ async fn ask(
             AskSource {
                 note_path: note_key,
                 title,
+                excerpt: snippet_preview(&chunk.text, 160),
+                kind: match chunk.kind {
+                    ChunkKind::Title => "title".to_string(),
+                    ChunkKind::Body => "body".to_string(),
+                },
                 chunk_index: chunk.index,
                 score,
             }
@@ -720,4 +821,65 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    use noema_core::{Chunk, ChunkKind};
+
+    #[test]
+    fn split_plain_note_without_blank_line_keeps_body_intact() {
+        let (title, body) = split_note_content("First line\nSecond line");
+        assert_eq!(title, "");
+        assert_eq!(body, "First line\nSecond line");
+    }
+
+    #[test]
+    fn split_editor_style_title_and_body() {
+        let (title, body) = split_note_content("My Title\n\nBody line one.\nBody line two.");
+        assert_eq!(title, "My Title");
+        assert_eq!(body, "Body line one.\nBody line two.");
+    }
+
+    #[test]
+    fn split_title_only_note() {
+        let (title, body) = split_note_content("My Title");
+        assert_eq!(title, "My Title");
+        assert_eq!(body, "");
+    }
+
+    #[test]
+    fn split_markdown_heading_title_and_body() {
+        let (title, body) = split_note_content("# Heading\n\nBody.");
+        assert_eq!(title, "Heading");
+        assert_eq!(body, "Body.");
+    }
+
+    #[test]
+    fn split_frontmatter_title_and_body() {
+        let raw = "---\ntitle: Frontmatter Title\n---\n\nBody copy.";
+        let (title, body) = split_note_content(raw);
+        assert_eq!(title, "Frontmatter Title");
+        assert_eq!(body, "Body copy.");
+    }
+
+    #[test]
+    fn filter_ask_results_drops_low_scoring_sources() {
+        let base_chunk = Chunk {
+            text: "Excerpt".to_string(),
+            kind: ChunkKind::Body,
+            note_path: PathBuf::from("note.md"),
+            index: 0,
+        };
+        let filtered = filter_ask_results_by_score(vec![
+            (base_chunk.clone(), 0.9),
+            (base_chunk.clone(), 0.76),
+            (base_chunk, 0.41),
+        ]);
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered.iter().all(|(_, score)| *score >= 0.72));
+    }
 }

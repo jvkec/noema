@@ -34,6 +34,7 @@ let utilityMode = "idle";
 let utilityFocused = false;
 let utilityHideTimer = null;
 let utilityModelExitTimer = null;
+let utilityPanelSignature = "";
 
 let chatModels = [];
 let selectedModel = null;
@@ -278,7 +279,7 @@ function renderApp() {
 
   utilityResultsEl = h("div", {
     className:
-      "hidden mb-1 transition-opacity duration-150 ease-out opacity-0 translate-y-1",
+      "hidden mb-1 transition duration-150 ease-out opacity-0 translate-y-1",
   });
   let panelHover = false;
   utilityResultsEl.addEventListener("mouseenter", () => { panelHover = true; });
@@ -303,7 +304,7 @@ function renderApp() {
     "div",
     {
       className:
-        "fixed bottom-6 left-1/2 -translate-x-1/2 z-20 w-full max-w-xl px-6",
+        "fixed bottom-[max(1.5rem,env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 z-20 w-full max-w-xl px-6",
     },
     utilityResultsEl,
     h(
@@ -544,8 +545,21 @@ function showNewFolderInput() {
 function noteDisplayName(note) {
   const p = note?.path?.trim();
   if (!p) return "new note";
+  const rawTitle = String(note?.title ?? "").trim();
   const filename = p.split("/").pop() || p;
-  return filename.replace(/\.md$/i, "") || "new note";
+  const stem = filename.replace(/\.md$/i, "");
+  const looksGeneratedUntitled = /^note-[a-f0-9-]+$/i.test(stem);
+  const titleIsFallbackPath =
+    rawTitle === p ||
+    rawTitle === filename;
+  if (!rawTitle || (looksGeneratedUntitled && titleIsFallbackPath)) {
+    return "new note";
+  }
+  if (rawTitle) {
+    return rawTitle;
+  }
+  const pretty = stem.replaceAll("-", " ").replaceAll(/ {2,}/g, " ").trim();
+  return pretty || "new note";
 }
 
 function filenameFromTitle(title) {
@@ -793,9 +807,60 @@ function resultCard(...children) {
     "div",
     {
       className:
-        "border border-stone-200 rounded-lg bg-white shadow-sm px-5 py-3",
+        "border border-stone-200 rounded-xl bg-white shadow-sm px-5 py-4",
     },
     ...children,
+  );
+}
+
+function cleanNoteLabel(path) {
+  return String(path || "").replace(/\.md$/i, "");
+}
+
+function sourceTitle(source) {
+  return source.title?.trim() || cleanNoteLabel(source.note_path);
+}
+
+function sourceMetaLabel(source) {
+  const pathLabel = cleanNoteLabel(source.note_path);
+  if (!pathLabel || pathLabel === sourceTitle(source)) {
+    return source.kind === "title" ? "title excerpt" : "body excerpt";
+  }
+  return `${pathLabel} · ${source.kind === "title" ? "title excerpt" : "body excerpt"}`;
+}
+
+function renderAskSource(source, index) {
+  return h(
+    "button",
+    {
+      className:
+        "group block w-full rounded-lg border border-stone-200 px-3 py-3 text-left hover:border-stone-300 hover:bg-stone-50 focus:outline-none focus-visible:ring-1 focus-visible:ring-stone-400",
+      onClick: () => {
+        selectNote(source.note_path);
+        clearUtility();
+      },
+    },
+    h(
+      "div",
+      { className: "flex items-start gap-3" },
+      h(
+        "span",
+        {
+          className:
+            "mt-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-stone-100 text-[11px] text-stone-500 tabular-nums",
+        },
+        String(index + 1),
+      ),
+      h(
+        "div",
+        { className: "min-w-0 flex-1" },
+        h("p", { className: "text-sm text-stone-800 text-pretty" }, sourceTitle(source)),
+        h("p", { className: "mt-0.5 text-xs text-stone-400 truncate" }, sourceMetaLabel(source)),
+        source.excerpt
+          ? h("p", { className: "mt-2 text-sm text-stone-500 text-pretty leading-relaxed" }, source.excerpt)
+          : null,
+      ),
+    ),
   );
 }
 
@@ -816,24 +881,28 @@ function renderAskPanel() {
 
   if (askResponse?.answer) {
     const items = [
-      h("p", { className: "text-sm text-stone-700 leading-relaxed text-pretty whitespace-pre-wrap" }, askResponse.answer),
+      h("p", {
+        className:
+          "text-sm text-stone-700 leading-relaxed text-pretty whitespace-pre-wrap",
+      }, askResponse.answer),
     ];
     if (askResponse.sources?.length > 0) {
       items.push(
-        h("div", { className: "mt-3 pt-2 border-t border-stone-100" },
-          ...askResponse.sources.map((s, i) =>
-            h("button", {
-              className: "block text-sm text-stone-400 hover:text-stone-700 py-0.5 focus:outline-none focus-visible:ring-1 focus-visible:ring-stone-400 rounded",
-              onClick: () => { selectNote(s.note_path); clearUtility(); },
-            }, `[${i + 1}] ${s.title || s.note_path}`),
+        h("div", { className: "mt-4 border-t border-stone-100 pt-4" },
+          h("p", { className: "mb-3 text-xs uppercase text-stone-400" }, "Sources"),
+          h("div", { className: "space-y-2" },
+            ...askResponse.sources.map((s, i) => renderAskSource(s, i)),
           ),
         ),
       );
     }
-    return h("div", { className: "border border-stone-200 rounded-lg bg-white shadow-sm px-5 py-3 max-h-64 overflow-y-auto" }, ...items);
+    return h("div", {
+      className:
+        "border border-stone-200 rounded-xl bg-white shadow-sm px-5 py-4 max-h-[28rem] overflow-y-auto",
+    }, ...items);
   }
 
-  return h("div", { className: "border border-stone-200 rounded-lg bg-white shadow-sm px-5 py-2.5" },
+  return h("div", { className: "border border-stone-200 rounded-xl bg-white shadow-sm px-5 py-3" },
     h("p", { className: "text-sm text-stone-300" }, "press enter to ask"),
   );
 }
@@ -856,7 +925,7 @@ function renderSearchPanel() {
         className: "block w-full text-left px-5 py-2.5 text-sm hover:bg-stone-50 focus:outline-none focus-visible:ring-1 focus-visible:ring-stone-400 rounded",
         onClick: () => { selectNote(r.note_path); clearUtility(); },
       },
-        h("span", { className: "text-stone-700" }, r.note_path.replace(/\.md$/i, "")),
+        h("span", { className: "text-stone-700" }, cleanNoteLabel(r.note_path)),
         h("span", { className: "text-stone-300 tabular-nums ml-2" }, r.score.toFixed(2)),
         r.preview ? h("p", { className: "text-stone-400 truncate mt-0.5 text-pretty" }, r.preview) : null,
       ),
@@ -919,8 +988,15 @@ function renderDefaultPanel() {
   }, ...items);
 }
 
-function showUtilityResults(panelEl) {
+function replaceUtilityPanel(panelEl) {
   if (!utilityResultsEl) return;
+  utilityResultsEl.innerHTML = "";
+  utilityResultsEl.appendChild(panelEl);
+}
+
+function showUtilityResults(panelEl, signature = "", animate = true) {
+  if (!utilityResultsEl) return;
+  const wasHidden = utilityResultsEl.classList.contains("hidden");
   if (utilityModelExitTimer) {
     clearTimeout(utilityModelExitTimer);
     utilityModelExitTimer = null;
@@ -929,9 +1005,18 @@ function showUtilityResults(panelEl) {
     clearTimeout(utilityHideTimer);
     utilityHideTimer = null;
   }
-  utilityResultsEl.innerHTML = "";
   utilityResultsEl.classList.remove("hidden");
-  utilityResultsEl.appendChild(panelEl);
+  replaceUtilityPanel(panelEl);
+  const shouldAnimate =
+    animate ||
+    wasHidden ||
+    signature !== utilityPanelSignature;
+  utilityPanelSignature = signature;
+  if (!shouldAnimate) {
+    utilityResultsEl.classList.remove("opacity-0", "translate-y-1");
+    utilityResultsEl.classList.add("opacity-100", "translate-y-0");
+    return;
+  }
   // Reset to a known "hidden" visual state so entry always animates.
   utilityResultsEl.classList.remove("opacity-100", "translate-y-0");
   utilityResultsEl.classList.add("opacity-0", "translate-y-1");
@@ -943,6 +1028,7 @@ function showUtilityResults(panelEl) {
 
 function hideUtilityResults() {
   if (!utilityResultsEl) return;
+  utilityPanelSignature = "";
   utilityResultsEl.classList.remove("opacity-100", "translate-y-0");
   utilityResultsEl.classList.add("opacity-0", "translate-y-1");
   if (utilityHideTimer) clearTimeout(utilityHideTimer);
@@ -960,12 +1046,20 @@ function updateUtilityPanel() {
   if (!utilityResultsEl) return;
 
   if (utilityMode === "ask") {
-    showUtilityResults(renderAskPanel());
+    showUtilityResults(
+      renderAskPanel(),
+      `ask:${isAsking ? "loading" : askResponse?.error ? `error:${askResponse.error}` : askResponse?.answer ? `answer:${askResponse.answer}` : "idle"}`,
+      false,
+    );
     return;
   }
 
   if (utilityMode === "search") {
-    showUtilityResults(renderSearchPanel());
+    showUtilityResults(
+      renderSearchPanel(),
+      `search:${isSearching ? "loading" : searchError ? `error:${searchError}` : searchResults.map((r) => `${r.note_path}:${r.score.toFixed(3)}`).join("|")}`,
+      false,
+    );
     return;
   }
 
@@ -975,7 +1069,11 @@ function updateUtilityPanel() {
       hideUtilityResults();
       return;
     }
-    showUtilityResults(renderFilterPanel());
+    showUtilityResults(
+      renderFilterPanel(),
+      `filter:${filterResults.map((n) => n.path).join("|")}`,
+      false,
+    );
     return;
   }
 
@@ -986,7 +1084,7 @@ function updateUtilityPanel() {
   if (caretActive && utilityMode === "idle") {
     const panel = renderDefaultPanel();
     if (panel) {
-      showUtilityResults(panel);
+      showUtilityResults(panel, `idle:${selectedModel || ""}`, false);
       return;
     }
   }
