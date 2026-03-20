@@ -40,4 +40,6 @@ npm run tauri build
 
 ## How I put it together
 
-It’s **Tauri 2** with a plain **JavaScript** UI (Vite + Tailwind). The interesting bit lives in `**noema-core`** (Rust): walk your markdown, break it into chunks, ask Ollama for embeddings, keep the vectors in memory for similarity search. For “ask” mode, it embeds your question, pulls the closest chunks, and sends those plus your question to a chat model. Settings and where your notes live are stored locally; the UI asks Ollama which chat models you have installed.
+It’s **Tauri 2** with a plain **JavaScript** UI (Vite + Tailwind). The interesting part lives in **`noema-core`** (Rust): it walks your Markdown files, breaks them into chunks, generates embeddings using Ollama, and keeps the vectors in memory for similarity search.
+
+In “ask” mode, it embeds your query, retrieves the most relevant chunks, and sends them—along with your question—to a chat model. Settings and note locations are stored locally, and the UI queries Ollama to determine which chat models are available.
