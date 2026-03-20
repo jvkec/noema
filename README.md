@@ -1,12 +1,12 @@
 # Noema
 
-Noema is a small, local-first app for your notes: search across them, or **ask** questions and get answers grounded in what you’ve actually written. Everything goes through **[Ollama](https://ollama.com)** on your computer—no API keys, no cloud unless you want one.
+Noema is a minimal, local-first life-repo: search across them, or **ask** questions and get answers grounded in what you’ve actually written. Everything goes through **[Ollama](https://ollama.com)** on your computer.
 
 ![Noema screenshot](public/screenshot.png)
 
 ## What you need
 
-I’ve only really run this on **macOS**, so treat everything else as “your mileage may vary.” You’ll want **[Node](https://nodejs.org/)** for the frontend, a normal **[Rust](https://www.rust-lang.org/)** setup for Tauri, and **[Ollama](https://ollama.com)** installed and left running while you use the app.
+I only really built this for MacOS rip. You’ll want **[Node](https://nodejs.org/)** for the frontend, a normal **[Rust](https://www.rust-lang.org/)** setup for Tauri, and **[Ollama](https://ollama.com)** installed and left running while you use the app.
 
 How heavy it feels depends on the models you pick: embedding models are usually cheap; the chat model is the one that eats RAM (or GPU) as it gets bigger.
 
