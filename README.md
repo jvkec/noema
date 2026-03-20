@@ -6,7 +6,7 @@ Noema is a minimal, local-first life-repo: search across them, or **ask** questi
 
 ## What you need
 
-I only really built this for MacOS rip. You’ll want **[Node](https://nodejs.org/)** for the frontend, a normal **[Rust](https://www.rust-lang.org/)** setup for Tauri, and **[Ollama](https://ollama.com)** installed and left running while you use the app.
+I only really built this for MacOS (because I use a Mac). You’ll want **[Node](https://nodejs.org/)** for the frontend, a normal **[Rust](https://www.rust-lang.org/)** setup for Tauri, and **[Ollama](https://ollama.com)** installed and left running while you use the app.
 
 How heavy it feels depends on the models you pick: embedding models are usually cheap; the chat model is the one that eats RAM (or GPU) as it gets bigger.
 
